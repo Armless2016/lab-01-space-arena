@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="uk">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="JavaScript Lab 01 - fixed timestep browser game" />
+    <title>Space Arena — Lab 01</title>
+  </head>
+  <body>
+    <main class="app">
+      <section class="game-shell">
+        <div class="topbar">
+          <div>
+            <h1>Space Arena</h1>
+            <p>JavaScript Lab 01 · Fixed Timestep</p>
+          </div>
+          <div class="hud" aria-label="Performance HUD">
+            <span>Steps/s: <strong id="steps">0</strong></span>
+            <span>Frames/s: <strong id="frames">0</strong></span>
+            <span>Frame: <strong id="frameTime">0.00</strong> ms</span>
+          </div>
+        </div>
+
+        <div class="canvas-wrap">
+          <canvas id="game" aria-label="Space game arena"></canvas>
+          <div class="controls">WASD / Arrow keys — move the ship</div>
+        </div>
+      </section>
+
+      <section class="experiments">
+        <div>
+          <h2>Event Loop Experiments</h2>
+          <p>
+            Three intentionally broken cases required by Lab 01. Run them one by one and copy
+            the measurements into README.md.
+          </p>
+        </div>
+        <div class="experiment-buttons">
+          <button id="blockingBtn">1. Blocking loop</button>
+          <button id="intervalBtn">2. setInterval</button>
+          <button id="variableBtn">3. Variable timestep</button>
+        </div>
+        <pre id="experimentOutput">No experiment run yet.</pre>
+      </section>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
