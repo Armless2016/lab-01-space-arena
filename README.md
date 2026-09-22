@@ -1,173 +1,250 @@
-# Lab 01 — Space Arena
+# JavaScript Semester Project — Space Arena
 
-JavaScript course project: the first step toward a real-time multiplayer browser game.
+## Lab 02 — Objects, prototypes, `this` and composition
 
-## Goal
-
-The project demonstrates:
-
-- JavaScript event loop concepts: call stack, tasks, microtasks and rendering;
-- ES modules;
-- `let` / `const`, block scope and closures;
-- `requestAnimationFrame`;
-- a fixed-step simulation using an accumulator;
-- interpolation between simulation states during rendering;
-- keyboard input implemented as a closure;
-- pure ship physics separated from the DOM;
-- Canvas 2D rendering with `devicePixelRatio` support;
-- wrapping the ship around arena edges;
-- three intentionally broken timing experiments.
+Це продовження Lab 01 у тому самому репозиторії. Фіксований цикл `requestAnimationFrame`, fixed timestep 60 Hz, інтерполяція, Canvas та базове керування кораблем з Lab 01 збережені. Lab 02 додає модель сутностей і системи ігрового світу.
 
 ## Run locally
-
-Requirements: a recent Node.js version compatible with the current Vite release.
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open the local URL printed by Vite.
-
 ## Controls
 
-- `WASD` or arrow keys — move the ship.
+- `WASD` або стрілки — рух;
+- `Space` — стрільба;
+- кожна п'ята куля отримує `HomingComponent`;
+- `P` — експеримент з prototype chain.
+
+## Lab 01 foundation
+
+Проєкт використовує `requestAnimationFrame()` для рендерингу та fixed timestep `1/60` для симуляції. Акумулятор накопичує реальний час і за потреби виконує кілька фіксованих simulation steps. Рендер отримує `alpha` та інтерполює між попереднім і поточним станом.
+
+`createInput()` зберігає натиснуті клавіші у приватному `Set`; `snapshot()` замкнений над цим станом. `physics.js` містить чисту `integrate()` без залежностей від DOM. Canvas масштабується через `devicePixelRatio`, а корабель загортається через краї арени.
+
+## Lab 02 requirements
+
+- `Vector2` з чистими методами: `add`, `sub`, `scale`, `dot`, `normalized`, `distanceTo`.
+- `Entity` з `id`, позицією, швидкістю, радіусом, `kind`, `update` та приватним static counter `#nextId`.
+- `class Ship extends Entity`; немає ієрархії глибше одного рівня `extends`.
+- `World` поверх `Map<id, Entity>`: `spawn`, `despawn`, sweep наприкінці `step`, ітератор і генератор `ofKind(kind)`.
+- Кулі з TTL, астероїди/перешкоди, ворожі кораблі та repair-pickup.
+- `Ship.fire()` створює кулю з носа корабля.
+- У `Ship` приватне `#hp` та публічний `get hp()`.
+- Окрема колізійна система коло-коло з наївним `O(n²)`.
+- Кулі пошкоджують кораблі та астероїди; при знищенні створюються частинки вибуху.
+- Респаун гравця через 2 секунди, рахунок і стан респауну на HUD.
+- `HomingComponent` і `PickupComponent` реалізовані композицією, а не окремими класами-комбінаціями.
 
 ## Project structure
 
 ```text
-lab-01-space-arena/
-├─ index.html
-├─ package.json
-├─ eslint.config.js
-├─ README.md
-└─ src/
-   ├─ main.js
-   ├─ style.css
-   ├─ loop.js
-   ├─ input.js
-   ├─ physics.js
-   ├─ render.js
-   └─ experiments.js
+src/
+├─ vector2.js
+├─ entity.js
+├─ ship.js
+├─ bullet.js
+├─ asteroid.js
+├─ pickup.js
+├─ particle.js
+├─ components.js
+├─ collisions.js
+├─ world.js
+├─ prototype-experiment.js
+├─ input.js
+├─ loop.js
+├─ render.js
+├─ physics.js
+├─ experiments.js
+├─ main.js
+└─ style.css
 ```
 
-## Fixed timestep
+## `this`: чотири правила і конкретний баг
 
-The browser calls `requestAnimationFrame()` before a repaint. The callback frequency usually follows the display refresh rate, so it may be approximately 60, 75, 120 or 144 times per second.
+У JavaScript важливий не текст оголошення функції, а спосіб її виклику.
 
-The game therefore does **not** use the frame rate as the simulation timestep. `createLoop()` accumulates real elapsed time and repeatedly calls:
+1. **Default binding:** звичайний `fn()` у strict/module-коді має `this === undefined`.
+2. **Implicit binding:** при `obj.method()` значення `this` — це `obj`.
+3. **Explicit binding:** `call`, `apply` та `bind` дозволяють явно задати `this`.
+4. **`new`:** під час `new Constructor()` `this` прив'язується до нового екземпляра.
+
+Стрілочні функції не мають власного `this`: вони беруть його з лексичного зовнішнього контексту.
+
+### Помилка `ship.fire`
+
+Побічний ефект такого коду:
 
 ```js
-update(1 / 60);
+input.onPress('Space', player.fire); // НЕПРАВИЛЬНО
 ```
 
-The simulation has one fixed step of `1/60` second. Rendering can happen at another rate. The renderer receives `alpha`, a value from `0` to `1`, and interpolates between the previous and current simulation states.
+`onPress` зберігає callback і пізніше викликає його як звичайну функцію. У strict/module-коді це означає, що `this` усередині `fire()` не буде об'єктом корабля.
 
-This separates simulation time from rendering time and prevents game physics from becoming directly dependent on the monitor refresh rate.
-
-## Closure for keyboard input
-
-`createInput()` keeps the pressed-key `Set` private. The returned `snapshot()` function closes over that Set and exposes only the current input state.
-
-`physics.js` does not access `window`, `document` or the Canvas. It receives plain data and returns a new ship state:
+### Фікс у проєкті
 
 ```js
-integrate(ship, input, dt, arena)
+input.onPress('Space', () => {
+  const currentPlayer = world.playerShip;
+  if (currentPlayer) currentPlayer.fire(world);
+});
 ```
 
-This keeps the physics function independent from the DOM.
+Тут стрілочна функція замикає `world`, знаходить актуальний корабель та викликає `fire()` через `currentPlayer`, тому implicit binding дає правильний `this`.
 
-## Canvas and devicePixelRatio
+Ще два допустимі способи:
 
-The Canvas CSS size is used as the logical game size. The backing resolution is multiplied by `window.devicePixelRatio`, and the drawing context is transformed by the same factor. This keeps the ship and grid sharp on high-DPI screens.
+```js
+input.onPress('Space', player.fire.bind(player));
+```
 
-## Event loop explanation
+або зберігати bound callback заздалегідь. У цьому проєкті вибрано arrow-wrapper, бо гравець може бути замінений після респауну і callback завжди бере актуальний `world.playerShip`.
 
-JavaScript executes jobs on a main thread. The browser event loop processes tasks, then drains the microtask queue, and then performs rendering when appropriate. Events and timer callbacks such as `setInterval()` are associated with task scheduling, while Promise callbacks are microtasks.
+## `Map`, `Set`, `spawn/despawn` та `World.step`
 
-A long synchronous operation blocks the main thread because JavaScript execution is run-to-completion. While it is blocked, input handling, timers and rendering cannot proceed normally.
+`World` зберігає сутності у `Map<id, Entity>`. `despawn()` не видаляє об'єкт відразу, а ставить `dead = true`. Наприкінці фіксованого кроку `sweep()` видаляє мертві сутності з `Map`.
 
-## Experiments
+`World` є ітерованим:
 
-Run the three experiment buttons in the browser and copy the numbers printed in the result panel into this README.
+```js
+for (const entity of world) {
+  // ...
+}
+```
 
-### 1. Blocking loop inside a frame
+і має генератор:
 
-**Measured on:** Windows 11, Google Chrome
+```js
+for (const asteroid of world.ofKind('asteroid')) {
+  // ...
+}
+```
 
-**Result:**
+`Entity.components` — це `Set`. Він використовується для підключення додаткової поведінки без створення нових гілок дерева класів.
+
+## Vector2
+
+Методи `Vector2` повертають нові вектори:
+
+```js
+const next = position.add(velocity.scale(dt));
+```
+
+Вхідний `position` не змінюється. Такий підхід спрощує передбачуваність фізики та допомагає не створювати прихованих побічних ефектів під час обчислень.
+
+## Prototype chain experiment
+
+Натисніть `P` або кнопку `Prototype chain`. Результат з'явиться у DevTools Console.
+
+Очікуваний ланцюжок:
 
 ```text
-"blockMsRequested": 500,
-  "blockMsActual": 500,
-  "nextFrameGapMs": 497.1999999761583,
-  "skipped60HzFrames": 28.831999998569497
+Ship instance -> Ship.prototype -> Entity.prototype -> Object.prototype -> null
 ```
 
-**Explanation:** a synchronous busy loop occupies the main JavaScript thread. While the stack is busy, the browser cannot run the next JavaScript work or perform the normal rendering opportunity. The next `requestAnimationFrame` callback is therefore delayed.
+Експеримент перевіряє:
 
-### 2. `setInterval()` instead of `requestAnimationFrame()`
+```js
+Object.getPrototypeOf(ship) === Ship.prototype;
+Object.getPrototypeOf(Ship.prototype) === Entity.prototype;
+Object.getPrototypeOf(Entity.prototype) === Object.prototype;
+```
 
-**Measured on:** Windows 11, Google Chrome
+Цього достатньо, щоб практично побачити ланцюжок прототипів, не перетворюючи роботу на окремий теоретичний розділ.
 
-**Result:**
+## Composition instead of deep inheritance
+
+Наївна ієрархія могла б виглядати так:
 
 ```text
-"requestedIntervalMs": 16.666666666666668,
-  "elapsedMs": 3008.399999976158,
-  "callbacks": 188,
-  "callbacksPerSecond": 62.49168993534434,
-  "averageIntervalMs": 16.00212765944765,
-  "minIntervalMs": 14.200000047683716,
-  "maxIntervalMs": 17.600000023841858,
-  "jitterStdDevMs": 0.6967979514308006
+Entity
+├─ Ship
+├─ Bullet
+│  └─ HomingBullet
+├─ Asteroid
+│  └─ HomingAsteroid
+└─ Pickup
+   └─ RepairPickup
 ```
 
-**Explanation:** `setInterval()` schedules timer callbacks as tasks. It is not a rendering synchronization mechanism. Its callback may run before or after a repaint and can be delayed when the main thread is busy. `requestAnimationFrame()` is designed specifically to schedule work before the next repaint.
+Але додавання нових властивостей швидко створює комбінації класів: `ExplosiveHomingBullet`, `ShieldPickup`, `SpeedPickup` тощо.
 
-### 3. Variable timestep instead of fixed timestep
-
-The experiment simulates the same acceleration for 2 seconds at different render/update rates.
-
-**Result:**
+У цій лабораторній використана композиція:
 
 ```text
-[
-  {
-    "renderFps": 30,
-    "variablePosition": 203.33333333333337,
-    "fixedPosition": 201.66666666666669,
-    "variableVelocity": 200.00000000000014,
-    "fixedVelocity": 199.99999999999974
-  },
-  {
-    "renderFps": 60,
-    "variablePosition": 201.66666666666669,
-    "fixedPosition": 201.66666666666669,
-    "variableVelocity": 199.99999999999974,
-    "fixedVelocity": 199.99999999999974
-  },
-  {
-    "renderFps": 120,
-    "variablePosition": 200.83333333333337,
-    "fixedPosition": 201.66666666666669,
-    "variableVelocity": 200.00000000000054,
-    "fixedVelocity": 199.99999999999974
-  }
-]
+Entity
+└─ components: Set<behavior>
+   ├─ Bullet + HomingComponent
+   ├─ Asteroid + HomingComponent
+   └─ Entity(kind="pickup") + PickupComponent
 ```
 
-**Explanation:** with a variable timestep, physics receives different `dt` values depending on how often frames arrive. Numerical integration can therefore produce different states for different frame rates. With a fixed timestep, the simulation advances using the same `1/60` second step regardless of the render rate.
+Той самий `HomingComponent` підключається і до кулі, і до астероїда. `PickupComponent` описує ефект предмета, а сам pickup залишається звичайною `Entity` із `kind="pickup"`. Тому поведінку можна комбінувати без розростання класової ієрархії.
 
-## Lint and build
+## Lab 01 experiments
+
+Ці три кнопки збережені в проєкті, щоб попередня лабораторна залишалась відтворюваною.
+
+### 1. Blocking loop
+
+**Measured on:** TODO — вставити свій браузер/ПК та результат з кнопки.
+
+```text
+Block requested: TODO ms
+Block actual: TODO ms
+Gap to next animation frame: TODO ms
+Estimated 60 Hz frames skipped: TODO
+```
+
+**Пояснення:** довгий синхронний цикл займає головний JS thread. Поки він виконується, наступний `requestAnimationFrame`, обробники та нормальна можливість рендеру затримуються.
+
+### 2. `setInterval()`
+
+**Measured on:** TODO
+
+```text
+Requested interval: TODO ms
+Elapsed: TODO ms
+Callbacks: TODO
+Callbacks/s: TODO
+Average interval: TODO ms
+Minimum interval: TODO ms
+Maximum interval: TODO ms
+Jitter (standard deviation): TODO ms
+```
+
+**Пояснення:** `setInterval()` запускає timer callbacks як задачі; це не механізм синхронізації з repaint. `requestAnimationFrame()` призначений для роботи безпосередньо перед наступною можливістю браузера перемалювати сторінку.
+
+### 3. Variable timestep
+
+```text
+Render FPS | Variable position | Fixed position | Variable velocity | Fixed velocity
+30         | TODO              | TODO          | TODO              | TODO
+60         | TODO              | TODO          | TODO              | TODO
+120        | TODO              | TODO          | TODO              | TODO
+```
+
+**Пояснення:** при variable timestep різні `dt` дають різний числовий результат інтегрування. Fixed timestep завжди рухає симуляцію кроком `1/60` секунди, тому render rate не визначає тривалість фізичного кроку.
+
+## Lint / build
 
 ```bash
 npm run lint
 npm run build
 ```
 
-The build should complete without errors, and ESLint should report no errors.
+## Submission for Lab 02
 
-## Lab result
+Після локальної перевірки:
 
-The project implements the first client-side foundation of the semester game: a Canvas-based spaceship controlled by the keyboard, with a fixed 60 Hz simulation, interpolated rendering, performance HUD and timing experiments. The code is split into ES modules so that the game loop, input, physics and rendering can later be reused when networking is added.
+```bash
+git add .
+git commit -m "lab-02: entities prototypes this and composition"
+git tag lab-02
+git push origin main
+git push origin lab-02
+```
+
+Здача: той самий публічний GitHub-репозиторій з тегом `lab-02`.
