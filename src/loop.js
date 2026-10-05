@@ -20,7 +20,6 @@ export function createLoop({ step = 1 / 60, update, render, onStats, maxStepsPer
     accumulator += frameDelta;
 
     let stepsThisFrame = 0;
-
     while (accumulator >= step && stepsThisFrame < maxStepsPerFrame) {
       update(step);
       accumulator -= step;
@@ -28,9 +27,7 @@ export function createLoop({ step = 1 / 60, update, render, onStats, maxStepsPer
       steps += 1;
     }
 
-    if (stepsThisFrame === maxStepsPerFrame) {
-      accumulator = 0;
-    }
+    if (stepsThisFrame === maxStepsPerFrame) accumulator = 0;
 
     const alpha = accumulator / step;
     render(alpha, frameDelta);

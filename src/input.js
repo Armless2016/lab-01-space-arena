@@ -2,28 +2,17 @@ export function createInput(target = window) {
   const pressedKeys = new Set();
   const pressListeners = new Map();
   const controlledKeys = new Set([
-    'KeyW',
-    'KeyA',
-    'KeyS',
-    'KeyD',
-    'ArrowUp',
-    'ArrowDown',
-    'ArrowLeft',
-    'ArrowRight',
-    'Space',
+    'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight',
+    'KeyW', 'KeyA', 'KeyS', 'KeyD', 'Space', 'Escape', 'KeyP',
   ]);
 
   function onKeyDown(event) {
-    if (!controlledKeys.has(event.code)) return;
-
-    event.preventDefault();
-    const wasPressed = pressedKeys.has(event.code);
+    if (controlledKeys.has(event.code)) event.preventDefault();
     pressedKeys.add(event.code);
 
-    if (!wasPressed) {
-      for (const listener of pressListeners.get(event.code) ?? []) {
-        listener(event);
-      }
+    const listeners = pressListeners.get(event.code);
+    if (!event.repeat && listeners) {
+      for (const listener of listeners) listener();
     }
   }
 
@@ -31,34 +20,30 @@ export function createInput(target = window) {
     pressedKeys.delete(event.code);
   }
 
-  function onBlur() {
-    pressedKeys.clear();
-  }
-
   target.addEventListener('keydown', onKeyDown);
   target.addEventListener('keyup', onKeyUp);
-  target.addEventListener('blur', onBlur);
 
   return {
     snapshot() {
       return {
-        up: pressedKeys.has('KeyW') || pressedKeys.has('ArrowUp'),
-        down: pressedKeys.has('KeyS') || pressedKeys.has('ArrowDown'),
-        left: pressedKeys.has('KeyA') || pressedKeys.has('ArrowLeft'),
-        right: pressedKeys.has('KeyD') || pressedKeys.has('ArrowRight'),
+        up: pressedKeys.has('ArrowUp') || pressedKeys.has('KeyW'),
+        down: pressedKeys.has('ArrowDown') || pressedKeys.has('KeyS'),
+        left: pressedKeys.has('ArrowLeft') || pressedKeys.has('KeyA'),
+        right: pressedKeys.has('ArrowRight') || pressedKeys.has('KeyD'),
       };
     },
     onPress(code, listener) {
-      if (!pressListeners.has(code)) {
-        pressListeners.set(code, new Set());
-      }
+      if (!pressListeners.has(code)) pressListeners.set(code, new Set());
       pressListeners.get(code).add(listener);
-      return () => pressListeners.get(code)?.delete(listener);
+    },
+    offPress(code, listener) {
+      pressListeners.get(code)?.delete(listener);
     },
     destroy() {
       target.removeEventListener('keydown', onKeyDown);
       target.removeEventListener('keyup', onKeyUp);
-      target.removeEventListener('blur', onBlur);
+      pressedKeys.clear();
+      pressListeners.clear();
     },
   };
 }

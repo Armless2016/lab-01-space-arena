@@ -3,9 +3,7 @@ const DRAG_PER_SECOND = 0.86;
 const MAX_SPEED = 360;
 
 function wrap(value, size) {
-  if (value < 0) return value + size;
-  if (value >= size) return value - size;
-  return value;
+  return ((value % size) + size) % size;
 }
 
 export function integrate(ship, input, dt, arena) {
@@ -34,11 +32,5 @@ export function integrate(ship, input, dt, arena) {
   const nextY = wrap(ship.y + vy * dt, arena.height);
   const nextAngle = speed > 5 ? Math.atan2(vy, vx) : ship.angle;
 
-  return {
-    x: nextX,
-    y: nextY,
-    vx,
-    vy,
-    angle: nextAngle,
-  };
+  return { x: nextX, y: nextY, vx, vy, angle: nextAngle };
 }

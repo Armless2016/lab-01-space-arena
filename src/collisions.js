@@ -1,5 +1,6 @@
 import { Particle } from './particle.js';
 import { Vector2 } from './vector2.js';
+import { emitGameEvent } from './event-bus.js';
 
 function circlesOverlap(first, second) {
   const dx = first.position.x - second.position.x;
@@ -13,25 +14,29 @@ function spawnExplosion(world, position, amount = 18) {
     const angle = Math.random() * Math.PI * 2;
     const speed = 60 + Math.random() * 240;
     const life = 0.35 + Math.random() * 0.5;
-    world.spawn(
-      new Particle({
-        position: position.clone(),
-        velocity: new Vector2(Math.cos(angle) * speed, Math.sin(angle) * speed),
-        life,
-        size: 1 + Math.random() * 3,
-      }),
-    );
+    world.spawn(new Particle({
+      position: position.clone(),
+      velocity: new Vector2(Math.cos(angle) * speed, Math.sin(angle) * speed),
+      life,
+      size: 1 + Math.random() * 3,
+    }));
   }
+}
+
+function explode(world, entity, reason) {
+  spawnExplosion(world, entity.position, entity.kind === 'ship' ? 30 : 20);
+  emitGameEvent('exploded', { entity, reason });
 }
 
 function handleBulletHit(bullet, target, world) {
   bullet.markDead();
+  emitGameEvent('hit', { source: bullet, target, damage: bullet.damage });
 
   if (target.kind === 'ship') {
     const destroyed = target.takeDamage(bullet.damage);
     if (destroyed) {
       world.score += target.isPlayer ? 0 : 100;
-      spawnExplosion(world, target.position, 28);
+      explode(world, target, 'bullet');
     }
     return;
   }
@@ -40,28 +45,28 @@ function handleBulletHit(bullet, target, world) {
     const destroyed = target.takeDamage(bullet.damage);
     if (destroyed) {
       world.score += 25;
-      spawnExplosion(world, target.position, 20);
+      explode(world, target, 'bullet');
     }
   }
 }
 
 function handleShipVsAsteroid(ship, asteroid, world) {
-  ship.takeDamage(10);
-  asteroid.takeDamage(10);
+  const shipWasDead = ship.takeDamage(10);
+  const asteroidWasDead = asteroid.takeDamage(10);
+  emitGameEvent('hit', { source: asteroid, target: ship, damage: 10 });
 
-  if (ship.dead) {
-    spawnExplosion(world, ship.position, 30);
-  }
-  if (asteroid.dead) {
+  if (shipWasDead) explode(world, ship, 'asteroid');
+  if (asteroidWasDead) {
     world.score += 25;
-    spawnExplosion(world, asteroid.position, 20);
+    explode(world, asteroid, 'ship-collision');
   }
 }
 
 function handleShipPickup(ship, pickup) {
-  const pickupComponent = [...pickup.components].find((component) => typeof component.collect === 'function');
-  if (pickupComponent?.collect(pickup, ship)) {
+  const component = [...pickup.components].find((entry) => typeof entry.collect === 'function');
+  if (component?.collect(pickup, ship)) {
     pickup.markDead();
+    emitGameEvent('hit', { source: pickup, target: ship, damage: -component.amount });
   }
 }
 

@@ -1,26 +1,24 @@
 import { Entity } from './entity.js';
 import { Bullet } from './bullet.js';
-import { Vector2 } from './vector2.js';
 import { HomingComponent } from './components.js';
+import { Vector2 } from './vector2.js';
+import { integrate } from './physics.js';
+import { emitGameEvent } from './event-bus.js';
 
-const ACCELERATION = 320;
-const DRAG_PER_SECOND = 0.86;
-const MAX_SPEED = 360;
 const FIRE_COOLDOWN = 0.22;
-
-function wrap(value, size) {
-  return ((value % size) + size) % size;
-}
 
 export class Ship extends Entity {
   #hp;
 
-  constructor({ position, player = false, hp = 100, angle = 0 } = {}) {
+  constructor({ position, player = false, hp = 100, angle = 0, maxHp = 100, name = 'Pilot' } = {}) {
     super({ position, velocity: new Vector2(), radius: 20, kind: 'ship', angle });
     this.isPlayer = player;
+    this.name = name;
     this.#hp = hp;
+    this.maxHp = maxHp;
     this.fireCooldown = 0;
     this.shotsFired = 0;
+    this.spriteFrame = 0;
   }
 
   get hp() {
@@ -35,7 +33,7 @@ export class Ship extends Entity {
 
   heal(amount) {
     const oldHp = this.#hp;
-    this.#hp = Math.min(100, this.#hp + amount);
+    this.#hp = Math.min(this.maxHp, this.#hp + amount);
     return this.#hp - oldHp;
   }
 
@@ -64,6 +62,7 @@ export class Ship extends Entity {
     }
 
     world.spawn(bullet);
+    emitGameEvent('fired', { ship: this, bullet });
     return bullet;
   }
 
@@ -72,42 +71,38 @@ export class Ship extends Entity {
     this.fireCooldown = Math.max(0, this.fireCooldown - dt);
 
     if (this.isPlayer) {
-      const input = world.inputState;
-      const horizontal = Number(input.right) - Number(input.left);
-      const vertical = Number(input.down) - Number(input.up);
-      const length = Math.hypot(horizontal, vertical);
-
-      const ax = length > 0 ? (horizontal / length) * ACCELERATION : 0;
-      const ay = length > 0 ? (vertical / length) * ACCELERATION : 0;
-      let nextVelocity = this.velocity.add(new Vector2(ax, ay).scale(dt));
-      nextVelocity = nextVelocity.scale(Math.pow(DRAG_PER_SECOND, dt));
-
-      const speed = nextVelocity.length();
-      if (speed > MAX_SPEED) {
-        nextVelocity = nextVelocity.scale(MAX_SPEED / speed);
-      }
-
-      this.velocity = nextVelocity;
-      if (speed > 5) this.angle = Math.atan2(nextVelocity.y, nextVelocity.x);
+      const next = integrate(
+        {
+          x: this.position.x,
+          y: this.position.y,
+          vx: this.velocity.x,
+          vy: this.velocity.y,
+          angle: this.angle,
+        },
+        world.inputState,
+        dt,
+        world.arena,
+      );
+      this.position = new Vector2(next.x, next.y);
+      this.velocity = new Vector2(next.vx, next.vy);
+      this.angle = next.angle;
     } else {
       const player = world.playerShip;
       if (player) {
         const toPlayer = player.position.sub(this.position);
         const distance = toPlayer.length();
         this.angle = toPlayer.angle();
-        const thrust = distance > 170 ? 120 : -30;
+        const thrust = distance > 180 ? 120 : -30;
         this.velocity = Vector2.fromAngle(this.angle, thrust);
-
-        if (this.fireCooldown <= 0 && distance < 520) {
-          this.fire(world);
-        }
+        if (this.fireCooldown <= 0 && distance < 560) this.fire(world);
       }
-    }
 
-    this.position = this.position.add(this.velocity.scale(dt));
-    this.position = new Vector2(
-      wrap(this.position.x, world.arena.width),
-      wrap(this.position.y, world.arena.height),
-    );
+      this.position = this.position.add(this.velocity.scale(dt));
+      const { width, height } = world.arena;
+      this.position = new Vector2(
+        ((this.position.x % width) + width) % width,
+        ((this.position.y % height) + height) % height,
+      );
+    }
   }
 }

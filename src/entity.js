@@ -27,14 +27,6 @@ export class Entity {
     return this;
   }
 
-  hasComponent(componentClass) {
-    return [...this.components].some((component) => component instanceof componentClass);
-  }
-
-  getComponent(componentClass) {
-    return [...this.components].find((component) => component instanceof componentClass);
-  }
-
   capturePreviousState() {
     this.previousPosition = this.position.clone();
     this.previousAngle = this.angle;

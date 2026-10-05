@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="JavaScript Lab 02 - entities, prototypes, this and composition" />
-    <title>Space Arena — Lab 02</title>
+    <meta name="description" content="JavaScript Lab 03 - asynchronous loading, lobby and Web Audio" />
+    <title>Space Arena — Lab 03</title>
   </head>
   <body>
     <main class="app">
@@ -12,44 +12,83 @@
         <div class="topbar">
           <div>
             <h1>Space Arena</h1>
-            <p>JavaScript Lab 02 · Objects, prototypes, this & composition</p>
+            <p>JavaScript Lab 03 · Async JavaScript, loading and lobby</p>
           </div>
-          <div class="hud" aria-label="Game HUD">
+          <div id="hud" class="hud" aria-label="Game HUD" hidden>
+            <span>Player: <strong id="playerName">-</strong></span>
+            <span>Room: <strong id="roomName">-</strong></span>
             <span>HP: <strong id="hp">0</strong></span>
             <span>Score: <strong id="score">0</strong></span>
             <span>Entities: <strong id="entities">0</strong></span>
-            <span>Respawn: <strong id="respawn">Ready</strong></span>
             <span>Steps/s: <strong id="steps">0</strong></span>
             <span>Frames/s: <strong id="frames">0</strong></span>
             <span>Frame: <strong id="frameTime">0.00</strong> ms</span>
+            <span>Audio: <strong id="audioState">locked</strong></span>
           </div>
         </div>
 
         <div class="canvas-wrap">
           <canvas id="game" aria-label="Space game arena"></canvas>
-          <div class="controls">
-            WASD / Arrows — move · Space — fire · P — prototype-chain experiment
+          <div id="canvasMessage" class="canvas-message"></div>
+          <div id="controls" class="controls" hidden>
+            WASD / Arrows — move · Space — fire · Esc — back to lobby
           </div>
         </div>
       </section>
 
-      <section class="experiments">
-        <div>
-          <h2>Lab 01 timing experiments</h2>
-          <p>These remain from Lab 01. Run them one by one when collecting the timing results for that README.</p>
+      <section id="bootPanel" class="panel">
+        <h2>Asset loading</h2>
+        <p id="bootText">Audio must be unlocked by a user gesture before the game assets are decoded.</p>
+        <div class="panel-actions">
+          <button id="loadGameBtn">Enable audio & load game</button>
+          <button id="cancelLoadBtn" hidden>Cancel loading</button>
+          <button id="retryBtn" hidden>Retry</button>
         </div>
-        <div class="experiment-buttons">
-          <button id="blockingBtn">1. Blocking loop</button>
-          <button id="intervalBtn">2. setInterval</button>
-          <button id="variableBtn">3. Variable timestep</button>
-          <button id="prototypeBtn">4. Prototype chain</button>
-        </div>
-        <pre id="experimentOutput">Prototype-chain experiment is also printed to DevTools Console on startup.</pre>
+        <pre id="bootError" class="output" hidden></pre>
       </section>
 
-      <section class="lab-notes">
-        <h2>Lab 02 checklist</h2>
-        <p>Ship extends Entity. World stores entities in Map. Components use Set. Every fifth shot is homing. The green pickup heals the ship. Bullets damage ships and asteroids.</p>
+      <section id="lobbyPanel" class="panel" hidden>
+        <div class="section-heading">
+          <div>
+            <h2>Lobby</h2>
+            <p>GET /api/rooms is polled while the lobby is visible. Each request has an AbortSignal.timeout.</p>
+          </div>
+          <button id="leaveLobbyBtn" hidden>Leave room</button>
+        </div>
+        <div class="lobby-grid">
+          <div>
+            <label for="playerNameInput">Player name</label>
+            <input id="playerNameInput" maxlength="18" value="Pilot" />
+          </div>
+          <div>
+            <label for="roomSelect">Room</label>
+            <select id="roomSelect"></select>
+          </div>
+          <button id="joinBtn" class="primary">Join</button>
+        </div>
+        <div id="roomList" class="room-list"></div>
+      </section>
+
+      <section id="diagnosticsPanel" class="panel" hidden>
+        <div class="section-heading">
+          <div>
+            <h2>Lab 03 diagnostics</h2>
+            <p>Failure gallery, Promise combinators and microtask ordering. These tests do not crash the game.</p>
+          </div>
+          <div class="section-actions"><button id="timingBtn">Measure sequential vs concurrent</button><button id="microtaskBtn">Run 5 microtask puzzles</button></div>
+        </div>
+        <div class="diagnostic-buttons">
+          <button data-failure="404">404 sprite</button>
+          <button data-failure="timeout">Network timeout</button>
+          <button data-failure="abort">Abort during load</button>
+          <button data-failure="json">Broken JSON</button>
+        </div>
+        <pre id="diagnosticOutput" class="output">No diagnostics run yet.</pre>
+      </section>
+
+      <section id="labNotes" class="panel" hidden>
+        <h2>Controls</h2>
+        <p>Move with WASD or arrow keys. Press Space to fire. Every fifth player shot is homing. Esc returns to the lobby and aborts the active lobby polling request.</p>
       </section>
     </main>
 

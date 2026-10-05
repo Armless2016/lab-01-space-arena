@@ -1,0 +1,15 @@
+{
+  "version": 3,
+  "retries": 3,
+  "assets": {
+    "ship": { "type": "image", "url": "/assets/ship.png" },
+    "bullet": { "type": "image", "url": "/assets/bullet.png" },
+    "asteroid": { "type": "image", "url": "/assets/asteroid.png" },
+    "pickup": { "type": "image", "url": "/assets/pickup.png" },
+    "fire": { "type": "audio", "url": "/assets/fire.wav" },
+    "hit": { "type": "audio", "url": "/assets/hit.wav" },
+    "explosion": { "type": "audio", "url": "/assets/explosion.wav" },
+    "pickupSound": { "type": "audio", "url": "/assets/pickup.wav" },
+    "meta": { "type": "json", "url": "/assets/asset-meta.json" }
+  }
+}

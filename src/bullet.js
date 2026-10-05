@@ -16,11 +16,11 @@ export class Bullet extends Entity {
     this.ttl = 1.6;
     this.homingSpeed = 620;
     this.isHoming = homing;
+    this.spriteFrame = homing ? 1 : 0;
   }
 
   update(dt, world) {
     super.update(dt, world);
-
     this.position = this.position.add(this.velocity.scale(dt));
     this.ttl -= dt;
 
@@ -30,8 +30,9 @@ export class Bullet extends Entity {
     }
 
     const { width, height } = world.arena;
-    const x = ((this.position.x % width) + width) % width;
-    const y = ((this.position.y % height) + height) % height;
-    this.position = new Vector2(x, y);
+    this.position = new Vector2(
+      ((this.position.x % width) + width) % width,
+      ((this.position.y % height) + height) % height,
+    );
   }
 }

@@ -16,9 +16,11 @@ body {
     radial-gradient(circle at 80% 90%, rgba(116, 56, 159, 0.16), transparent 26%),
     #060913;
 }
-button { font: inherit; }
+button, input, select { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: wait; opacity: 0.55; }
 .app { width: min(1180px, 100%); margin: 0 auto; padding: 24px; }
-.game-shell, .experiments, .lab-notes {
+.game-shell, .panel {
   border: 1px solid rgba(255, 255, 255, 0.12);
   border-radius: 18px;
   background: rgba(10, 16, 31, 0.86);
@@ -28,19 +30,33 @@ button { font: inherit; }
 .topbar { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 18px 20px; }
 h1, h2, p { margin: 0; }
 h1 { font-size: 1.55rem; }
-.topbar p, .experiments p, .lab-notes p { margin-top: 5px; color: #9eacc8; font-size: 0.92rem; line-height: 1.55; }
+.topbar p, .panel p { margin-top: 5px; color: #9eacc8; font-size: 0.92rem; line-height: 1.55; }
 .hud { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .hud span { border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px; padding: 7px 9px; color: #a9b8d6; font-size: 0.8rem; background: rgba(255, 255, 255, 0.03); }
 .hud strong { color: #f1f6ff; }
 .canvas-wrap { position: relative; overflow: hidden; aspect-ratio: 16 / 9; min-height: 420px; border-radius: 0 0 18px 18px; background: #02050b; }
 #game { display: block; width: 100%; height: 100%; }
 .controls { position: absolute; left: 14px; bottom: 12px; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 8px; padding: 7px 9px; color: rgba(225, 236, 255, 0.72); font-size: 0.76rem; background: rgba(3, 7, 16, 0.72); }
-.experiments, .lab-notes { margin-top: 18px; padding: 20px; }
-.experiments h2, .lab-notes h2 { font-size: 1.1rem; }
-.experiment-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
-.experiment-buttons button { cursor: pointer; border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 9px; padding: 9px 12px; color: #eaf2ff; background: #111a30; }
-.experiment-buttons button:hover { background: #172440; }
-.experiment-buttons button:disabled { cursor: wait; opacity: 0.55; }
-#experimentOutput { overflow-x: auto; margin: 16px 0 0; min-height: 120px; border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 10px; padding: 14px; color: #d6e1f5; background: #050914; white-space: pre-wrap; }
-@media (max-width: 800px) { .topbar { flex-direction: column; } .hud { justify-content: flex-start; } }
+.canvas-message { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); color: #eaf2ff; font-weight: 700; pointer-events: none; }
+.canvas-message.error { color: #ff8592; }
+.panel { margin-top: 18px; padding: 20px; }
+.panel-actions, .section-actions, .diagnostic-buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+.panel button, .diagnostic-buttons button { border: 1px solid rgba(255,255,255,.12); border-radius: 9px; padding: 9px 12px; color: #eaf2ff; background: #111a30; }
+.panel button:hover, .diagnostic-buttons button:hover { background: #172440; }
+.panel .primary { background: #214b71; }
+.output { overflow-x: auto; margin: 16px 0 0; min-height: 90px; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; padding: 14px; color: #d6e1f5; background: #050914; white-space: pre-wrap; }
+.lobby-grid { display: grid; grid-template-columns: 1fr 1.3fr auto; align-items: end; gap: 12px; margin-top: 18px; }
+.lobby-grid label { display: block; margin-bottom: 7px; color: #a9b8d6; font-size: 0.8rem; }
+.lobby-grid input, .lobby-grid select { width: 100%; border: 1px solid rgba(255,255,255,.12); border-radius: 9px; padding: 10px 12px; color: #edf5ff; background: #08101f; outline: none; }
+.room-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 18px; }
+.room-card { display: flex; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,.1); border-radius: 12px; padding: 13px; background: rgba(255,255,255,.025); }
+.room-card span { color: #79d3ff; font-size: .84rem; }
+.room-card small { color: #8fa0bc; line-height: 1.4; }
+.section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+@media (max-width: 840px) {
+  .topbar { flex-direction: column; }
+  .hud { justify-content: flex-start; }
+  .lobby-grid { grid-template-columns: 1fr; }
+  .room-list { grid-template-columns: 1fr; }
+}
 @media (max-width: 720px) { .app { padding: 12px; } .canvas-wrap { min-height: 320px; } }

@@ -1,9 +1,10 @@
 export class World {
   #entities = new Map();
 
-  constructor({ width, height, playerFactory }) {
+  constructor({ width, height, playerFactory, events }) {
     this.arena = { width, height };
     this.playerFactory = playerFactory;
+    this.events = events;
     this.inputState = {};
     this.score = 0;
     this.respawnTimer = null;
@@ -70,7 +71,10 @@ export class World {
     if (this.respawnTimer <= 0) {
       this.respawnTimer = null;
       const newPlayer = this.playerFactory?.();
-      if (newPlayer) this.spawn(newPlayer);
+      if (newPlayer) {
+        this.spawn(newPlayer);
+        this.events?.dispatchEvent(new CustomEvent('respawned', { detail: { entity: newPlayer } }));
+      }
     }
   }
 

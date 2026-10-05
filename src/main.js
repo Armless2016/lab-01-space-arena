@@ -1,175 +1,244 @@
 import './style.css';
-import { createInput } from './input.js';
-import { createLoop } from './loop.js';
-import { createRenderer } from './render.js';
-import { runBlockingExperiment, runIntervalExperiment, runVariableStepExperiment } from './experiments.js';
-import { World } from './world.js';
-import { Ship } from './ship.js';
-import { Asteroid } from './asteroid.js';
-import { Pickup } from './pickup.js';
-import { Vector2 } from './vector2.js';
-import { processCollisions } from './collisions.js';
-import { runPrototypeExperiment } from './prototype-experiment.js';
+import { loadJson, loadAll } from './asset-loader.js';
+import { createLoadingRenderer } from './render.js';
+import { createAudioSystem } from './audio.js';
+import { gameEvents } from './event-bus.js';
+import { createHud } from './hud.js';
+import { Lobby } from './lobby.js';
+import { createLobbyView } from './lobby-view.js';
+import { createGame } from './game.js';
+import { runFailureGallery, runMicrotaskPuzzles, runPromiseCombinatorsDemo, measureAssetStrategies } from './diagnostics.js';
 
 const canvas = document.querySelector('#game');
-const stepsElement = document.querySelector('#steps');
-const framesElement = document.querySelector('#frames');
-const frameTimeElement = document.querySelector('#frameTime');
-const hpElement = document.querySelector('#hp');
-const scoreElement = document.querySelector('#score');
-const entitiesElement = document.querySelector('#entities');
-const respawnElement = document.querySelector('#respawn');
-const outputElement = document.querySelector('#experimentOutput');
-const blockingButton = document.querySelector('#blockingBtn');
-const intervalButton = document.querySelector('#intervalBtn');
-const variableButton = document.querySelector('#variableBtn');
-const prototypeButton = document.querySelector('#prototypeBtn');
+const loadingRenderer = createLoadingRenderer(canvas);
+const audio = createAudioSystem();
 
-const renderer = createRenderer(canvas);
-const input = createInput();
-let size = renderer.getSize();
-let player;
+const bootPanel = document.querySelector('#bootPanel');
+const bootText = document.querySelector('#bootText');
+const bootError = document.querySelector('#bootError');
+const loadGameButton = document.querySelector('#loadGameBtn');
+const cancelLoadButton = document.querySelector('#cancelLoadBtn');
+const retryButton = document.querySelector('#retryBtn');
+const lobbyPanel = document.querySelector('#lobbyPanel');
+const lobbyElements = {
+  panel: lobbyPanel,
+  nameInput: document.querySelector('#playerNameInput'),
+  roomSelect: document.querySelector('#roomSelect'),
+  roomList: document.querySelector('#roomList'),
+  joinButton: document.querySelector('#joinBtn'),
+};
+const leaveLobbyButton = document.querySelector('#leaveLobbyBtn');
+const diagnosticsPanel = document.querySelector('#diagnosticsPanel');
+const diagnosticOutput = document.querySelector('#diagnosticOutput');
+const microtaskButton = document.querySelector('#microtaskBtn');
+const timingButton = document.querySelector('#timingBtn');
+const controls = document.querySelector('#controls');
+const canvasMessage = document.querySelector('#canvasMessage');
 
-const world = new World({
-  width: size.width,
-  height: size.height,
-  playerFactory: () => createPlayer(),
+const hud = createHud({
+  root: document.querySelector('#hud'),
+  playerName: document.querySelector('#playerName'),
+  roomName: document.querySelector('#roomName'),
+  hp: document.querySelector('#hp'),
+  score: document.querySelector('#score'),
+  entities: document.querySelector('#entities'),
+  steps: document.querySelector('#steps'),
+  frames: document.querySelector('#frames'),
+  frameTime: document.querySelector('#frameTime'),
+  audioState: document.querySelector('#audioState'),
 });
-world.collisionSystem = processCollisions;
 
-function randomPosition() {
-  return new Vector2(
-    70 + Math.random() * Math.max(1, size.width - 140),
-    70 + Math.random() * Math.max(1, size.height - 140),
-  );
+const lobbyView = createLobbyView(lobbyElements);
+const lobby = new Lobby();
+let game = null;
+let assets = null;
+let loadController = null;
+
+function setBootMessage(text, isError = false) {
+  bootText.textContent = text;
+  canvasMessage.textContent = isError ? 'Asset loading failed' : '';
+  canvasMessage.classList.toggle('error', isError);
 }
 
-function createPlayer() {
-  return new Ship({
-    position: new Vector2(size.width / 2, size.height / 2),
-    player: true,
-    hp: 100,
+async function bootAssets() {
+  loadController = new AbortController();
+  loadGameButton.hidden = true;
+  retryButton.hidden = true;
+  cancelLoadButton.hidden = false;
+  bootError.hidden = true;
+  loadingRenderer.draw({ progress: 0, label: 'Loading manifest...' });
+
+  try {
+    const manifest = await loadJson('/assets/manifest.json', {
+      signal: loadController.signal,
+      retries: 3,
+    });
+
+    setBootMessage('Loading images, audio and room metadata...');
+    const loaded = await loadAll(manifest, {
+      signal: loadController.signal,
+      audioContext: await audio.unlock(),
+      onProgress({ completed, total, current }) {
+        const progress = total > 0 ? completed / total : 0;
+        loadingRenderer.draw({
+          progress,
+          label: current ? `Loaded: ${current}` : 'Starting...',
+        });
+      },
+    });
+
+    assets = loaded;
+    audio.setBuffer('fire', loaded.fire);
+    audio.setBuffer('hit', loaded.hit);
+    audio.setBuffer('explosion', loaded.explosion);
+    audio.setBuffer('pickup', loaded.pickupSound);
+    loadingRenderer.draw({ progress: 1, label: 'Assets ready' });
+    bootPanel.hidden = true;
+    diagnosticsPanel.hidden = false;
+    lobbyPanel.hidden = false;
+    lobbyView.show();
+    await lobby.start();
+    hud.setAudioState(audio.state);
+  } catch (error) {
+    if (loadController.signal.aborted) {
+      setBootMessage('Loading cancelled. Press Retry to start again.');
+    } else {
+      setBootMessage('Loading failed. Press Retry to try again.', true);
+      bootError.textContent = `${error.name}: ${error.message}`;
+      bootError.hidden = false;
+    }
+    loadingRenderer.draw({ progress: 0, label: error.message, error: true });
+    loadGameButton.hidden = true;
+    cancelLoadButton.hidden = true;
+    retryButton.hidden = false;
+  } finally {
+    loadController = null;
+  }
+}
+
+loadGameButton.addEventListener('click', () => {
+  void bootAssets();
+});
+
+cancelLoadButton.addEventListener('click', () => {
+  loadController?.abort(new DOMException('Loading cancelled by player', 'AbortError'));
+});
+
+retryButton.addEventListener('click', () => {
+  void bootAssets();
+});
+
+lobby.addEventListener('rooms', (event) => {
+  lobbyView.setRooms(event.detail.rooms);
+});
+
+lobby.addEventListener('error', (event) => {
+  diagnosticOutput.textContent = `Lobby error handled: ${event.detail.error?.message ?? 'unknown error'}`;
+});
+
+lobby.addEventListener('join', (event) => {
+  startLocalGame(event.detail);
+});
+
+lobbyElements.joinButton.addEventListener('click', () => {
+  lobby.join(lobbyView.selectedRoomId, lobbyView.playerName);
+});
+
+leaveLobbyButton.addEventListener('click', () => {
+  game?.stop();
+  game = null;
+  controls.hidden = true;
+  hud.hide();
+  lobbyPanel.hidden = false;
+  void lobby.start();
+});
+
+function startLocalGame({ room, playerName }) {
+  lobby.stop();
+  lobbyPanel.hidden = true;
+  hud.show();
+  controls.hidden = false;
+  hud.setPlayer(playerName);
+  hud.setRoom(room.name);
+
+  game = createGame({
+    canvas,
+    assets,
+    room,
+    playerName,
+    onLeave: () => {
+      leaveLobbyButton.click();
+    },
+    onStats: (stats) => {
+      if (game) hud.update(game.world, stats);
+      hud.setAudioState(audio.state);
+    },
+  });
+  game.start();
+}
+
+gameEvents.addEventListener('fired', () => {
+  audio.play('fire', { volume: 0.12, rate: 0.94 + Math.random() * 0.12 });
+});
+
+gameEvents.addEventListener('hit', (event) => {
+  const damage = event.detail.damage;
+  audio.play(damage < 0 ? 'pickup' : 'hit', { volume: damage < 0 ? 0.18 : 0.1 });
+});
+
+gameEvents.addEventListener('exploded', () => {
+  audio.play('explosion', { volume: 0.16, rate: 0.9 + Math.random() * 0.2 });
+});
+
+gameEvents.addEventListener('respawned', () => {
+  audio.play('pickup', { volume: 0.16, rate: 1.15 });
+});
+
+for (const button of diagnosticsPanel.querySelectorAll('[data-failure]')) {
+  button.addEventListener('click', async () => {
+    const kind = button.dataset.failure;
+    diagnosticOutput.textContent = `Running ${kind}...`;
+    const result = await runFailureGallery(kind);
+    const combinators = await runPromiseCombinatorsDemo();
+    diagnosticOutput.textContent = [
+      JSON.stringify(result, null, 2),
+      '',
+      'Promise combinators demo:',
+      JSON.stringify(combinators, null, 2),
+    ].join('\n');
   });
 }
 
-function spawnInitialWorld() {
-  player = createPlayer();
-  world.spawn(player);
 
-  const enemyPositions = [
-    new Vector2(size.width * 0.78, size.height * 0.28),
-    new Vector2(size.width * 0.72, size.height * 0.75),
-  ];
-  for (const position of enemyPositions) {
-    world.spawn(new Ship({ position, angle: Math.PI, hp: 60 }));
+timingButton.addEventListener('click', async () => {
+  timingButton.disabled = true;
+  diagnosticOutput.textContent = 'Measuring sequential await vs concurrent Promise.all...';
+  try {
+    const result = await measureAssetStrategies(await loadJson('/assets/manifest.json', { retries: 0 }), await audio.unlock());
+    diagnosticOutput.textContent = `Asset loading timing\n${JSON.stringify(result, null, 2)}\n\nRun this again if you want a fresh measurement for README.`;
+  } catch (error) {
+    diagnosticOutput.textContent = `${error.name}: ${error.message}`;
+  } finally {
+    timingButton.disabled = false;
   }
+});
 
-  for (let index = 0; index < 8; index += 1) {
-    const homing = index === 0;
-    const angle = Math.random() * Math.PI * 2;
-    world.spawn(
-      new Asteroid({
-        position: randomPosition(),
-        velocity: Vector2.fromAngle(angle, 20 + Math.random() * 45),
-        radius: 20 + Math.random() * 12,
-        hp: 50,
-        homing,
-      }),
-    );
+microtaskButton.addEventListener('click', async () => {
+  microtaskButton.disabled = true;
+  diagnosticOutput.textContent = 'Running five microtask puzzles...';
+  try {
+    const results = await runMicrotaskPuzzles();
+    diagnosticOutput.textContent = results.map((result) => `${result.name}\n${result.output.join(' → ')}\n${result.explanation}`).join('\n\n');
+  } finally {
+    microtaskButton.disabled = false;
   }
-
-  world.spawn(new Pickup({
-    position: new Vector2(size.width * 0.25, size.height * 0.25),
-    type: 'repair',
-    amount: 35,
-  }));
-}
-
-function refreshPlayerReference() {
-  const current = world.playerShip;
-  if (current) player = current;
-}
-
-function setButtonsDisabled(disabled) {
-  blockingButton.disabled = disabled;
-  intervalButton.disabled = disabled;
-  variableButton.disabled = disabled;
-  prototypeButton.disabled = disabled;
-}
-
-function appendOutput(title, value) {
-  outputElement.textContent = `${title}\n${JSON.stringify(value, null, 2)}`;
-}
-
-// IMPORTANT: do not pass player.fire directly. This arrow keeps the desired player reference.
-input.onPress('Space', () => {
-  const currentPlayer = world.playerShip;
-  if (currentPlayer) currentPlayer.fire(world);
-});
-
-input.onPress('KeyP', () => {
-  runPrototypeExperiment(world.playerShip);
-});
-
-spawnInitialWorld();
-runPrototypeExperiment(player);
-
-const loop = createLoop({
-  step: 1 / 60,
-  update(dt) {
-    size = renderer.getSize();
-    world.arena.width = size.width;
-    world.arena.height = size.height;
-    world.step(dt, input.snapshot());
-    refreshPlayerReference();
-  },
-  render(alpha) {
-    renderer.render(world, alpha);
-  },
-  onStats({ stepsPerSecond, framesPerSecond, frameTimeMs }) {
-    stepsElement.textContent = String(stepsPerSecond);
-    framesElement.textContent = String(framesPerSecond);
-    frameTimeElement.textContent = frameTimeMs.toFixed(2);
-
-    const currentPlayer = world.playerShip;
-    hpElement.textContent = currentPlayer ? String(currentPlayer.hp) : '0';
-    scoreElement.textContent = String(world.score);
-    entitiesElement.textContent = String(world.size);
-    respawnElement.textContent = world.respawnTimer === null ? 'Ready' : `${Math.max(0, world.respawnTimer).toFixed(1)} s`;
-  },
-});
-
-blockingButton.addEventListener('click', async () => {
-  setButtonsDisabled(true);
-  appendOutput('Running blocking-loop experiment...', {});
-  const result = await runBlockingExperiment();
-  appendOutput('1. Blocking loop result', result);
-  setButtonsDisabled(false);
-});
-
-intervalButton.addEventListener('click', async () => {
-  setButtonsDisabled(true);
-  appendOutput('Running setInterval experiment...', {});
-  const result = await runIntervalExperiment();
-  appendOutput('2. setInterval result', result);
-  setButtonsDisabled(false);
-});
-
-variableButton.addEventListener('click', () => {
-  setButtonsDisabled(true);
-  appendOutput('3. Variable timestep result', runVariableStepExperiment());
-  setButtonsDisabled(false);
-});
-
-prototypeButton.addEventListener('click', () => {
-  const result = runPrototypeExperiment(world.playerShip);
-  appendOutput('Prototype chain result (also printed to DevTools console)', result);
 });
 
 window.addEventListener('beforeunload', () => {
-  loop.stop();
-  input.destroy();
-  renderer.destroy();
+  lobby.stop();
+  game?.stop();
+  loadController?.abort(new DOMException('Page closed', 'AbortError'));
 });
 
-loop.start();
+hud.hide();
+loadingRenderer.draw({ progress: 0, label: 'Click “Enable audio & load game” to begin.' });

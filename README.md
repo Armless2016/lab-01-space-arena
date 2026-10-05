@@ -1,8 +1,8 @@
 # JavaScript Semester Project — Space Arena
 
-## Lab 02 — Objects, prototypes, `this` and composition
+## Lab 03 — Async JavaScript: Promises, async/await and loading
 
-Це продовження Lab 01 у тому самому репозиторії. Фіксований цикл `requestAnimationFrame`, fixed timestep 60 Hz, інтерполяція, Canvas та базове керування кораблем з Lab 01 збережені. Lab 02 додає модель сутностей і системи ігрового світу.
+Це продовження тих самих Lab 01–02 у тому самому публічному репозиторії. Fixed timestep, Canvas, корабель, `Entity`, `World`, кулі, астероїди та зіткнення збереглися. Lab 03 додає асинхронний пайплайн ресурсів, екран завантаження, лобі, Web Audio, EventTarget-шину, Promise combinators, async iteration та контроль помилок.
 
 ## Run locally
 
@@ -11,240 +11,236 @@ npm install
 npm run dev
 ```
 
-## Controls
+Для Lab 03 використовується Vite middleware: `GET /api/rooms` повертає статичний JSON з `public/api/rooms.json`; `/api/slow` та `/api/broken-json` використовуються лише для тестів збоїв.
 
-- `WASD` або стрілки — рух;
-- `Space` — стрільба;
-- кожна п'ята куля отримує `HomingComponent`;
-- `P` — експеримент з prototype chain.
+## User flow
 
-## Lab 01 foundation
+1. Натиснути **Enable audio & load game**. Це user gesture, після якого створюється `AudioContext`.
+2. На Canvas показується реальний прогрес-бар. `await loadAll(...)` завершується лише після завантаження всіх ресурсів.
+3. Після завантаження відкривається Lobby. Вибір кімнати передає її конфіг локальній грі.
+4. У грі працюють WASD/стрілки та Space. `Esc` повертає до Lobby.
 
-Проєкт використовує `requestAnimationFrame()` для рендерингу та fixed timestep `1/60` для симуляції. Акумулятор накопичує реальний час і за потреби виконує кілька фіксованих simulation steps. Рендер отримує `alpha` та інтерполює між попереднім і поточним станом.
+## Async asset pipeline
 
-`createInput()` зберігає натиснуті клавіші у приватному `Set`; `snapshot()` замкнений над цим станом. `physics.js` містить чисту `integrate()` без залежностей від DOM. Canvas масштабується через `devicePixelRatio`, а корабель загортається через краї арени.
+`public/assets/manifest.json` містить картинки, звуки та JSON-метадані. `asset-loader.js` має:
 
-## Lab 02 requirements
+- `fetchJson()` як спільний JSON-fetcher з перевіркою `response.ok`;
+- `loadImage()`, `loadAudio()`, `loadJson()` — усі приймають `AbortSignal`;
+- retry для мережевих/5xx помилок з exponential backoff + jitter;
+- **жодного retry на 4xx**;
+- `loadAll()` з `Promise.all`, тому незалежні файли завантажуються конкурентно;
+- прогрес після завершення кожного окремого файлу.
 
-- `Vector2` з чистими методами: `add`, `sub`, `scale`, `dot`, `normalized`, `distanceTo`.
-- `Entity` з `id`, позицією, швидкістю, радіусом, `kind`, `update` та приватним static counter `#nextId`.
-- `class Ship extends Entity`; немає ієрархії глибше одного рівня `extends`.
-- `World` поверх `Map<id, Entity>`: `spawn`, `despawn`, sweep наприкінці `step`, ітератор і генератор `ofKind(kind)`.
-- Кулі з TTL, астероїди/перешкоди, ворожі кораблі та repair-pickup.
-- `Ship.fire()` створює кулю з носа корабля.
-- У `Ship` приватне `#hp` та публічний `get hp()`.
-- Окрема колізійна система коло-коло з наївним `O(n²)`.
-- Кулі пошкоджують кораблі та астероїди; при знищенні створюються частинки вибуху.
-- Респаун гравця через 2 секунди, рахунок і стан респауну на HUD.
-- `HomingComponent` і `PickupComponent` реалізовані композицією, а не окремими класами-комбінаціями.
+Якщо завантаження падає, гра не падає: показується помилка та кнопка **Retry**. Кнопка **Cancel loading** abort-ить активний `fetch`.
+
+### Sequential vs concurrent timing
+
+У блоці Lab 03 diagnostics є **Measure sequential vs concurrent**. Натиснути його після завантаження і перенести числа у таблицю нижче.
+
+| Files | Sequential `await` | Concurrent `Promise.all` | Speedup |
+|---:|---:|---:|---:|
+| 9 | TODO ms | TODO ms | TODO× |
+
+**Висновок:** sequential варіант чекає завершення кожного файлу перед початком наступного; concurrent створює всі Promises одразу, тому мережеві очікування перекриваються.
+
+## Spritesheets
+
+Корабель, куля та астероїд малюються з локальних PNG sprite sheets. Рендер бере окремий кадр спрайтшита, а не малює ці сутності простими геометричними фігурами. Pickup також має власний sprite sheet.
+
+## Web Audio + EventTarget
+
+`audio.js` не імпортується симуляцією. `World`, `Ship` і collision system не знають про DOM або Audio API.
+
+Шина знаходиться у `event-bus.js`:
+
+```js
+export const gameEvents = new EventTarget();
+```
+
+Симуляція генерує `CustomEvent`:
+
+- `fired` — куля створена;
+- `hit` — зафіксоване попадання/зіткнення;
+- `exploded` — сутність знищена та створено вибух.
+
+`main.js` слухає ці події та передає їх у `audio.js` і `hud.js`. Таким чином симуляція не залежить від presentation layer.
+
+### Audio lifecycle
+
+`AudioContext` створюється тільки після натискання **Enable audio & load game**. Після цього звукові буфери декодуються під час `loadAll()` і готові до моментального відтворення під час `fired`/`hit`/`exploded`.
+
+## Lobby and AbortController
+
+`class Lobby extends EventTarget` знаходиться у `lobby.js`, а робота з DOM винесена в `lobby-view.js`.
+
+Поки Lobby видима, виконується періодичний `GET /api/rooms`. Кожен запит отримує `AbortSignal.timeout(...)`. Коли гравець Join-иться або виходить з Lobby, попередній controller абортиться, а interval очищується.
+
+Поки мережевий endpoint не замінений реальною серверною логікою, Vite middleware віддає статичний JSON. У наступній лабораторній цей endpoint можна замінити справжнім сервером.
+
+## Promise combinators
+
+У diagnostics є демонстрація чотирьох combinators:
+
+- `Promise.all` — чекає всі успішні результати; саме так завантажується manifest;
+- `Promise.allSettled` — повертає результат кожної операції, навіть якщо одна впала;
+- `Promise.race` — повертає першу завершену Promise;
+- `Promise.any` — повертає першу успішну Promise.
+
+## Five microtask/task ordering puzzles
+
+Натиснути **Run 5 microtask puzzles**. Кожна головоломка виводить фактичний порядок у браузері та коротке пояснення.
+
+1. **Promise microtask vs setTimeout task**
+
+Очікувано:
+
+```text
+sync-A → sync-D → microtask-B → task-C
+```
+
+Пояснення: synchronous code завершується першим, потім event loop очищає microtask queue, а timer callback потрапляє в наступну task.
+
+2. **`await` continuation**
+
+Очікувано:
+
+```text
+sync-A → async-B → sync-D → after-await-C
+```
+
+Пояснення: код після `await` не виконується синхронно — continuation ставиться у microtask queue.
+
+3. **`setTimeout` всередині `.then()`**
+
+Очікувано:
+
+```text
+sync-A → sync-E → then-B → then-D → timer-C
+```
+
+Пояснення: обидва `.then()` виконуються під час drain microtask queue; `setTimeout` з першого `.then()` створює окрему task.
+
+4. **`requestAnimationFrame` + microtask**
+
+Типовий результат у desktop Chromium після запуску головоломки:
+
+```text
+sync-A → sync-E → micro-D → raf-B → micro-after-raf-C
+```
+
+Пояснення: Promise callback є microtask після synchronous script; `requestAnimationFrame` виконується під час rendering opportunity, а Promise всередині rAF додає ще одну microtask. Точне співвідношення з іншими rendering/timer callbacks залежить від моменту кадру, тому у програмі виводиться фактичний результат.
+
+5. **FIFO та chained Promise**
+
+Очікувано:
+
+```text
+sync-A → sync-E → micro-B → micro-D → micro-C
+```
+
+Пояснення: перші microtasks обробляються у FIFO-порядку; continuation другого `.then()` додається до черги після виконання попереднього callback.
+
+## Failure gallery
+
+Кнопки у diagnostics навмисно запускають чотири помилки. Жодна не повинна ламати сторінку.
+
+| Failure | What happens | Recovery |
+|---|---|---|
+| 404 sprite | `fetch` отримує HTTP 404; 4xx не retry-иться | Promise reject ловиться, гра продовжує роботу |
+| Network timeout | `/api/slow` не відповідає до `AbortSignal.timeout(120)` | timeout abort ловиться |
+| Abort during load | `AbortController.abort()` скасовує повільний запит посеред завантаження | AbortError ловиться |
+| Broken JSON | сервер повертає 200, але JSON синтаксично битий | parsing error ловиться |
+
+Під час реального старту критична помилка asset pipeline переводить Canvas у стан Error і показує **Retry**, тому гра не падає безконтрольно.
+
+## Lab 01–02 foundation
+
+### Lab 01
+
+- `createLoop()` з `requestAnimationFrame` та accumulator;
+- fixed timestep `1/60`, interpolation через `alpha`;
+- `createInput()` як closure над приватним `Set`;
+- чиста `integrate(ship, input, dt, arena)` без DOM;
+- Canvas 2D та `devicePixelRatio`;
+- wrapping країв;
+- три timing experiments: blocking loop, `setInterval`, variable timestep.
+
+### Lab 02
+
+- `Vector2`, `Entity`, `Ship extends Entity`;
+- приватні `#id` та `#hp`, `get hp()`;
+- `World` на `Map<id, Entity>` та `Set` компонентів;
+- `spawn/despawn` + sweep, generator `ofKind()`;
+- TTL bullets, asteroids, collisions `O(n²)`, particles, score, respawn;
+- `this` fix через arrow-wrapper / `bind`;
+- prototype-chain experiment;
+- `HomingComponent` і `PickupComponent` через композицію.
 
 ## Project structure
 
 ```text
-src/
-├─ vector2.js
-├─ entity.js
-├─ ship.js
-├─ bullet.js
-├─ asteroid.js
-├─ pickup.js
-├─ particle.js
-├─ components.js
-├─ collisions.js
-├─ world.js
-├─ prototype-experiment.js
-├─ input.js
-├─ loop.js
-├─ render.js
-├─ physics.js
-├─ experiments.js
-├─ main.js
-└─ style.css
+.
+├─ public/
+│  ├─ api/rooms.json
+│  └─ assets/
+│     ├─ manifest.json
+│     ├─ asset-meta.json
+│     ├─ ship.png
+│     ├─ bullet.png
+│     ├─ asteroid.png
+│     ├─ pickup.png
+│     ├─ fire.wav
+│     ├─ hit.wav
+│     ├─ explosion.wav
+│     └─ pickup.wav
+├─ src/
+│  ├─ asset-loader.js
+│  ├─ audio.js
+│  ├─ collisions.js
+│  ├─ components.js
+│  ├─ diagnostics.js
+│  ├─ entity.js
+│  ├─ event-bus.js
+│  ├─ game.js
+│  ├─ hud.js
+│  ├─ input.js
+│  ├─ lobby-view.js
+│  ├─ lobby.js
+│  ├─ loop.js
+│  ├─ main.js
+│  ├─ microtask-puzzles.js
+│  ├─ particle.js
+│  ├─ physics.js
+│  ├─ render.js
+│  ├─ ship.js
+│  ├─ asteroid.js
+│  ├─ bullet.js
+│  ├─ pickup.js
+│  ├─ vector2.js
+│  ├─ world.js
+│  └─ style.css
+├─ index.html
+├─ vite.config.js
+├─ package.json
+└─ README.md
 ```
 
-## `this`: чотири правила і конкретний баг
-
-У JavaScript важливий не текст оголошення функції, а спосіб її виклику.
-
-1. **Default binding:** звичайний `fn()` у strict/module-коді має `this === undefined`.
-2. **Implicit binding:** при `obj.method()` значення `this` — це `obj`.
-3. **Explicit binding:** `call`, `apply` та `bind` дозволяють явно задати `this`.
-4. **`new`:** під час `new Constructor()` `this` прив'язується до нового екземпляра.
-
-Стрілочні функції не мають власного `this`: вони беруть його з лексичного зовнішнього контексту.
-
-### Помилка `ship.fire`
-
-Побічний ефект такого коду:
-
-```js
-input.onPress('Space', player.fire); // НЕПРАВИЛЬНО
-```
-
-`onPress` зберігає callback і пізніше викликає його як звичайну функцію. У strict/module-коді це означає, що `this` усередині `fire()` не буде об'єктом корабля.
-
-### Фікс у проєкті
-
-```js
-input.onPress('Space', () => {
-  const currentPlayer = world.playerShip;
-  if (currentPlayer) currentPlayer.fire(world);
-});
-```
-
-Тут стрілочна функція замикає `world`, знаходить актуальний корабель та викликає `fire()` через `currentPlayer`, тому implicit binding дає правильний `this`.
-
-Ще два допустимі способи:
-
-```js
-input.onPress('Space', player.fire.bind(player));
-```
-
-або зберігати bound callback заздалегідь. У цьому проєкті вибрано arrow-wrapper, бо гравець може бути замінений після респауну і callback завжди бере актуальний `world.playerShip`.
-
-## `Map`, `Set`, `spawn/despawn` та `World.step`
-
-`World` зберігає сутності у `Map<id, Entity>`. `despawn()` не видаляє об'єкт відразу, а ставить `dead = true`. Наприкінці фіксованого кроку `sweep()` видаляє мертві сутності з `Map`.
-
-`World` є ітерованим:
-
-```js
-for (const entity of world) {
-  // ...
-}
-```
-
-і має генератор:
-
-```js
-for (const asteroid of world.ofKind('asteroid')) {
-  // ...
-}
-```
-
-`Entity.components` — це `Set`. Він використовується для підключення додаткової поведінки без створення нових гілок дерева класів.
-
-## Vector2
-
-Методи `Vector2` повертають нові вектори:
-
-```js
-const next = position.add(velocity.scale(dt));
-```
-
-Вхідний `position` не змінюється. Такий підхід спрощує передбачуваність фізики та допомагає не створювати прихованих побічних ефектів під час обчислень.
-
-## Prototype chain experiment
-
-Натисніть `P` або кнопку `Prototype chain`. Результат з'явиться у DevTools Console.
-
-Очікуваний ланцюжок:
-
-```text
-Ship instance -> Ship.prototype -> Entity.prototype -> Object.prototype -> null
-```
-
-Експеримент перевіряє:
-
-```js
-Object.getPrototypeOf(ship) === Ship.prototype;
-Object.getPrototypeOf(Ship.prototype) === Entity.prototype;
-Object.getPrototypeOf(Entity.prototype) === Object.prototype;
-```
-
-Цього достатньо, щоб практично побачити ланцюжок прототипів, не перетворюючи роботу на окремий теоретичний розділ.
-
-## Composition instead of deep inheritance
-
-Наївна ієрархія могла б виглядати так:
-
-```text
-Entity
-├─ Ship
-├─ Bullet
-│  └─ HomingBullet
-├─ Asteroid
-│  └─ HomingAsteroid
-└─ Pickup
-   └─ RepairPickup
-```
-
-Але додавання нових властивостей швидко створює комбінації класів: `ExplosiveHomingBullet`, `ShieldPickup`, `SpeedPickup` тощо.
-
-У цій лабораторній використана композиція:
-
-```text
-Entity
-└─ components: Set<behavior>
-   ├─ Bullet + HomingComponent
-   ├─ Asteroid + HomingComponent
-   └─ Entity(kind="pickup") + PickupComponent
-```
-
-Той самий `HomingComponent` підключається і до кулі, і до астероїда. `PickupComponent` описує ефект предмета, а сам pickup залишається звичайною `Entity` із `kind="pickup"`. Тому поведінку можна комбінувати без розростання класової ієрархії.
-
-## Lab 01 experiments
-
-Ці три кнопки збережені в проєкті, щоб попередня лабораторна залишалась відтворюваною.
-
-### 1. Blocking loop
-
-**Measured on:** TODO — вставити свій браузер/ПК та результат з кнопки.
-
-```text
-Block requested: TODO ms
-Block actual: TODO ms
-Gap to next animation frame: TODO ms
-Estimated 60 Hz frames skipped: TODO
-```
-
-**Пояснення:** довгий синхронний цикл займає головний JS thread. Поки він виконується, наступний `requestAnimationFrame`, обробники та нормальна можливість рендеру затримуються.
-
-### 2. `setInterval()`
-
-**Measured on:** TODO
-
-```text
-Requested interval: TODO ms
-Elapsed: TODO ms
-Callbacks: TODO
-Callbacks/s: TODO
-Average interval: TODO ms
-Minimum interval: TODO ms
-Maximum interval: TODO ms
-Jitter (standard deviation): TODO ms
-```
-
-**Пояснення:** `setInterval()` запускає timer callbacks як задачі; це не механізм синхронізації з repaint. `requestAnimationFrame()` призначений для роботи безпосередньо перед наступною можливістю браузера перемалювати сторінку.
-
-### 3. Variable timestep
-
-```text
-Render FPS | Variable position | Fixed position | Variable velocity | Fixed velocity
-30         | TODO              | TODO          | TODO              | TODO
-60         | TODO              | TODO          | TODO              | TODO
-120        | TODO              | TODO          | TODO              | TODO
-```
-
-**Пояснення:** при variable timestep різні `dt` дають різний числовий результат інтегрування. Fixed timestep завжди рухає симуляцію кроком `1/60` секунди, тому render rate не визначає тривалість фізичного кроку.
-
-## Lint / build
-
-```bash
-npm run lint
-npm run build
-```
-
-## Submission for Lab 02
+## Submission for Lab 03
 
 Після локальної перевірки:
 
 ```bash
+npm run lint
+npm run build
 git add .
-git commit -m "lab-02: entities prototypes this and composition"
-git tag lab-02
+git commit -m "lab-03: async loading lobby audio and promises"
 git push origin main
-git push origin lab-02
+git tag lab-03
+git push origin lab-03
 ```
 
-Здача: той самий публічний GitHub-репозиторій з тегом `lab-02`.
+Здача: **той самий публічний GitHub-репозиторій**, але з тегом `lab-03`, та README з:
+
+1. sequential vs concurrent timing;
+2. п'ятьма microtask/task puzzles;
+3. failure gallery для 404, timeout, abort та broken JSON.

@@ -4,6 +4,10 @@ export class Vector2 {
     this.y = y;
   }
 
+  clone() {
+    return new Vector2(this.x, this.y);
+  }
+
   add(other) {
     return new Vector2(this.x + other.x, this.y + other.y);
   }
@@ -12,12 +16,8 @@ export class Vector2 {
     return new Vector2(this.x - other.x, this.y - other.y);
   }
 
-  scale(scalar) {
-    return new Vector2(this.x * scalar, this.y * scalar);
-  }
-
-  dot(other) {
-    return this.x * other.x + this.y * other.y;
+  scale(factor) {
+    return new Vector2(this.x * factor, this.y * factor);
   }
 
   length() {
@@ -37,11 +37,7 @@ export class Vector2 {
     return Math.atan2(this.y, this.x);
   }
 
-  clone() {
-    return new Vector2(this.x, this.y);
-  }
-
-  static fromAngle(angle, length = 1) {
-    return new Vector2(Math.cos(angle) * length, Math.sin(angle) * length);
+  static fromAngle(angle, magnitude = 1) {
+    return new Vector2(Math.cos(angle) * magnitude, Math.sin(angle) * magnitude);
   }
 }

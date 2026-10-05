@@ -1,0 +1,35 @@
+[
+  {
+    "id": "rookie",
+    "name": "Rookie Orbit",
+    "players": 1,
+    "maxPlayers": 4,
+    "width": 960,
+    "height": 540,
+    "asteroids": 7,
+    "enemies": 2,
+    "enemyHp": 60
+  },
+  {
+    "id": "ace",
+    "name": "Ace Belt",
+    "players": 2,
+    "maxPlayers": 6,
+    "width": 1120,
+    "height": 630,
+    "asteroids": 10,
+    "enemies": 3,
+    "enemyHp": 80
+  },
+  {
+    "id": "chaos",
+    "name": "Chaos Nebula",
+    "players": 3,
+    "maxPlayers": 8,
+    "width": 1280,
+    "height": 720,
+    "asteroids": 14,
+    "enemies": 5,
+    "enemyHp": 70
+  }
+]

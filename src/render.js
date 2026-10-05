@@ -1,195 +1,199 @@
-function wrap(value, size) {
-  return ((value % size) + size) % size;
-}
-
-function interpolateWrapped(previous, current, alpha, size) {
-  let delta = current - previous;
-  if (Math.abs(delta) > size / 2) {
-    delta -= Math.sign(delta) * size;
-  }
-  return wrap(previous + delta * alpha, size);
-}
-
-function interpolateAngle(previous, current, alpha) {
-  let delta = current - previous;
-  while (delta > Math.PI) delta -= Math.PI * 2;
-  while (delta < -Math.PI) delta += Math.PI * 2;
-  return previous + delta * alpha;
-}
-
 export function createRenderer(canvas) {
-  const ctx = canvas.getContext('2d');
-  let width = 1;
-  let height = 1;
+  const context = canvas.getContext('2d');
+  const assets = {
+    ship: null,
+    bullet: null,
+    asteroid: null,
+    pickup: null,
+  };
+  let width = 960;
+  let height = 540;
   let dpr = 1;
 
   function resize() {
     const rect = canvas.getBoundingClientRect();
-    width = Math.max(1, rect.width);
-    height = Math.max(1, rect.height);
+    width = Math.max(320, rect.width || 960);
+    height = Math.max(240, rect.height || 540);
     dpr = window.devicePixelRatio || 1;
     canvas.width = Math.round(width * dpr);
     canvas.height = Math.round(height * dpr);
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
   }
 
-  function drawBackground() {
-    ctx.fillStyle = '#02050b';
-    ctx.fillRect(0, 0, width, height);
+  function setAssets(loaded) {
+    assets.ship = loaded.ship;
+    assets.bullet = loaded.bullet;
+    assets.asteroid = loaded.asteroid;
+    assets.pickup = loaded.pickup;
+  }
 
-    ctx.strokeStyle = 'rgba(125, 170, 230, 0.08)';
-    ctx.lineWidth = 1;
-    const grid = 48;
-    ctx.beginPath();
-    for (let x = 0; x <= width; x += grid) {
-      ctx.moveTo(x, 0);
-      ctx.lineTo(x, height);
+  function drawSprite(image, frame, frameCount, x, y, size, angle = 0) {
+    if (!image) return false;
+    const frameWidth = image.width / frameCount;
+    const frameHeight = image.height;
+    context.save();
+    context.translate(x, y);
+    context.rotate(angle);
+    context.imageSmoothingEnabled = false;
+    context.drawImage(
+      image,
+      frame * frameWidth,
+      0,
+      frameWidth,
+      frameHeight,
+      -size / 2,
+      -size / 2,
+      size,
+      size,
+    );
+    context.restore();
+    return true;
+  }
+
+  function render(world, alpha = 0) {
+    context.clearRect(0, 0, width, height);
+
+    const gradient = context.createRadialGradient(width * 0.5, height * 0.45, 10, width * 0.5, height * 0.5, Math.max(width, height));
+    gradient.addColorStop(0, '#0b1b35');
+    gradient.addColorStop(1, '#02050b');
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, width, height);
+
+    context.fillStyle = 'rgba(255,255,255,0.8)';
+    for (let index = 0; index < 80; index += 1) {
+      const x = (index * 137.5) % width;
+      const y = (index * 71.3) % height;
+      const radius = index % 7 === 0 ? 1.4 : 0.7;
+      context.globalAlpha = 0.25 + (index % 5) * 0.12;
+      context.beginPath();
+      context.arc(x, y, radius, 0, Math.PI * 2);
+      context.fill();
     }
-    for (let y = 0; y <= height; y += grid) {
-      ctx.moveTo(0, y);
-      ctx.lineTo(width, y);
+    context.globalAlpha = 1;
+
+    const entities = [...world];
+    for (const entity of entities) {
+      if (entity.dead) continue;
+      const x = entity.previousPosition.x + (entity.position.x - entity.previousPosition.x) * alpha;
+      const y = entity.previousPosition.y + (entity.position.y - entity.previousPosition.y) * alpha;
+
+      if (entity.kind === 'ship') {
+        const frame = Math.floor(performance.now() / 130) % 4;
+        if (!drawSprite(assets.ship, frame, 4, x, y, 58, entity.angle)) {
+          context.fillStyle = entity.isPlayer ? '#72d6ff' : '#ff778e';
+          context.beginPath();
+          context.moveTo(x + 22, y);
+          context.lineTo(x - 15, y - 13);
+          context.lineTo(x - 10, y);
+          context.lineTo(x - 15, y + 13);
+          context.closePath();
+          context.fill();
+        }
+      } else if (entity.kind === 'bullet') {
+        const frame = entity.isHoming ? Math.floor(performance.now() / 80) % 4 : 0;
+        if (!drawSprite(assets.bullet, frame, 4, x, y, 18, entity.angle)) {
+          context.fillStyle = entity.isHoming ? '#ffe266' : '#dff8ff';
+          context.beginPath();
+          context.arc(x, y, 4, 0, Math.PI * 2);
+          context.fill();
+        }
+      } else if (entity.kind === 'asteroid') {
+        if (!drawSprite(assets.asteroid, entity.spriteFrame, 4, x, y, entity.radius * 2.3, entity.angle)) {
+          context.fillStyle = '#6c758b';
+          context.beginPath();
+          context.arc(x, y, entity.radius, 0, Math.PI * 2);
+          context.fill();
+        }
+      } else if (entity.kind === 'pickup') {
+        const pulse = 1 + Math.sin(entity.pulse) * 0.08;
+        if (!drawSprite(assets.pickup, Math.floor(performance.now() / 150) % 4, 4, x, y, 34 * pulse)) {
+          context.strokeStyle = '#76f0a6';
+          context.lineWidth = 3;
+          context.beginPath();
+          context.arc(x, y, 12 * pulse, 0, Math.PI * 2);
+          context.stroke();
+          context.beginPath();
+          context.moveTo(x - 6, y);
+          context.lineTo(x + 6, y);
+          context.moveTo(x, y - 6);
+          context.lineTo(x, y + 6);
+          context.stroke();
+        }
+      } else if (entity.kind === 'particle') {
+        context.globalAlpha = entity.alpha;
+        context.fillStyle = '#ffd477';
+        context.beginPath();
+        context.arc(x, y, entity.size, 0, Math.PI * 2);
+        context.fill();
+        context.globalAlpha = 1;
+      }
     }
-    ctx.stroke();
 
-    const time = performance.now() * 0.00008;
-    for (let index = 0; index < 100; index += 1) {
-      const x = (index * 97) % width;
-      const y = (index * 53) % height;
-      const alpha = 0.2 + 0.15 * Math.sin(time + index);
-      ctx.fillStyle = `rgba(220, 235, 255, ${alpha})`;
-      ctx.fillRect(x, y, 1, 1);
-    }
+    context.strokeStyle = 'rgba(127, 191, 255, 0.18)';
+    context.strokeRect(0.5, 0.5, width - 1, height - 1);
   }
 
-  function getPosition(entity, alpha) {
-    return {
-      x: interpolateWrapped(entity.previousPosition.x, entity.position.x, alpha, width),
-      y: interpolateWrapped(entity.previousPosition.y, entity.position.y, alpha, height),
-    };
-  }
-
-  function drawShip(entity, alpha) {
-    const { x, y } = getPosition(entity, alpha);
-    const angle = interpolateAngle(entity.previousAngle, entity.angle, alpha);
-
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(angle);
-    ctx.fillStyle = entity.isPlayer ? '#e7f2ff' : '#ff9696';
-    ctx.strokeStyle = entity.isPlayer ? '#66a9ff' : '#ff4d6d';
-    ctx.lineWidth = 2;
-
-    ctx.beginPath();
-    ctx.moveTo(24, 0);
-    ctx.lineTo(-15, -11);
-    ctx.lineTo(-8, 0);
-    ctx.lineTo(-15, 11);
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = 'rgba(102, 169, 255, 0.9)';
-    ctx.beginPath();
-    ctx.moveTo(-14, -5);
-    ctx.lineTo(-27, 0);
-    ctx.lineTo(-14, 5);
-    ctx.closePath();
-    ctx.fill();
-    ctx.restore();
-  }
-
-  function drawBullet(entity, alpha) {
-    const { x, y } = getPosition(entity, alpha);
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(entity.angle);
-    ctx.fillStyle = entity.isHoming ? '#ffd166' : '#8de1ff';
-    ctx.shadowBlur = 10;
-    ctx.shadowColor = ctx.fillStyle;
-    ctx.fillRect(-4, -2, 8, 4);
-    ctx.restore();
-  }
-
-  function drawAsteroid(entity, alpha) {
-    const { x, y } = getPosition(entity, alpha);
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.rotate(entity.angle);
-    ctx.strokeStyle = '#aeb7c6';
-    ctx.fillStyle = entity.isHoming ? 'rgba(255, 209, 102, 0.18)' : 'rgba(170, 175, 190, 0.16)';
-    ctx.lineWidth = 2;
-
-    ctx.beginPath();
-    const points = 8;
-    for (let index = 0; index < points; index += 1) {
-      const angle = (index / points) * Math.PI * 2;
-      const wobble = entity.radius * (0.78 + ((index * 17) % 23) / 100);
-      const px = Math.cos(angle) * wobble;
-      const py = Math.sin(angle) * wobble;
-      if (index === 0) ctx.moveTo(px, py);
-      else ctx.lineTo(px, py);
-    }
-    ctx.closePath();
-    ctx.fill();
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawPickup(entity, alpha) {
-    const { x, y } = getPosition(entity, alpha);
-    ctx.save();
-    ctx.translate(x, y);
-    ctx.strokeStyle = '#6ee7b7';
-    ctx.fillStyle = 'rgba(110, 231, 183, 0.15)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(0, 0, entity.radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.beginPath();
-    ctx.moveTo(-6, 0);
-    ctx.lineTo(6, 0);
-    ctx.moveTo(0, -6);
-    ctx.lineTo(0, 6);
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  function drawParticle(entity, alpha) {
-    const { x, y } = getPosition(entity, alpha);
-    ctx.fillStyle = `rgba(255, 190, 80, ${entity.alpha})`;
-    ctx.beginPath();
-    ctx.arc(x, y, entity.size, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  function drawEntity(entity, alpha) {
-    if (entity.dead) return;
-    switch (entity.kind) {
-      case 'ship': drawShip(entity, alpha); break;
-      case 'bullet': drawBullet(entity, alpha); break;
-      case 'asteroid': drawAsteroid(entity, alpha); break;
-      case 'pickup': drawPickup(entity, alpha); break;
-      case 'particle': drawParticle(entity, alpha); break;
-      default: break;
-    }
-  }
-
-  function render(world, alpha) {
-    drawBackground();
-    for (const entity of world) drawEntity(entity, alpha);
+  function destroy() {
+    window.removeEventListener('resize', resize);
   }
 
   window.addEventListener('resize', resize);
   resize();
 
   return {
-    getSize() {
-      return { width, height };
-    },
+    resize,
+    getSize: () => ({ width, height }),
+    setAssets,
     render,
-    destroy() {
-      window.removeEventListener('resize', resize);
-    },
+    destroy,
   };
+}
+
+export function createLoadingRenderer(canvas) {
+  const context = canvas.getContext('2d');
+  let width = 960;
+  let height = 540;
+  let dpr = 1;
+
+  function resize() {
+    const rect = canvas.getBoundingClientRect();
+    width = Math.max(320, rect.width || 960);
+    height = Math.max(240, rect.height || 540);
+    dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  }
+
+  function draw({ progress = 0, label = 'Loading...', error = false }) {
+    context.clearRect(0, 0, width, height);
+    context.fillStyle = '#02050b';
+    context.fillRect(0, 0, width, height);
+
+    context.fillStyle = '#eaf2ff';
+    context.textAlign = 'center';
+    context.font = '700 30px system-ui';
+    context.fillText('SPACE ARENA', width / 2, height / 2 - 48);
+
+    context.fillStyle = '#91a4c6';
+    context.font = '15px system-ui';
+    context.fillText(label, width / 2, height / 2 - 16);
+
+    const barWidth = Math.min(520, width - 80);
+    const barX = (width - barWidth) / 2;
+    const barY = height / 2 + 22;
+    context.fillStyle = 'rgba(255,255,255,0.08)';
+    context.fillRect(barX, barY, barWidth, 18);
+    context.fillStyle = error ? '#ef6a7a' : '#69d2ff';
+    context.fillRect(barX, barY, barWidth * Math.max(0, Math.min(1, progress)), 18);
+
+    context.fillStyle = '#dfe9f8';
+    context.font = '700 13px system-ui';
+    context.fillText(`${Math.round(progress * 100)}%`, width / 2, barY + 45);
+  }
+
+  window.addEventListener('resize', resize);
+  resize();
+
+  return { resize, draw };
 }
