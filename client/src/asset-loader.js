@@ -12,10 +12,10 @@ function isClientError(status) {
   return status >= 400 && status < 500;
 }
 
-async function fetchResource(url, { signal, retries = 3, baseDelay = 180, jitter = 120, responseType = 'arrayBuffer' } = {}) {
+async function fetchResource(url, { signal, retries = 3, baseDelay = 180, jitter = 120, responseType = 'arrayBuffer', requestInit = {} } = {}) {
   for (let attempt = 0; attempt <= retries; attempt += 1) {
     try {
-      const response = await fetch(url, { signal, cache: 'no-store' });
+      const response = await fetch(url, { ...requestInit, signal, cache: 'no-store' });
       if (!response.ok) {
         if (isClientError(response.status)) {
           throw new Error(`HTTP ${response.status} for ${url}`);

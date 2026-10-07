@@ -1,20 +1,17 @@
 import js from '@eslint/js';
 import globals from 'globals';
-import { defineConfig } from 'eslint/config';
 
-export default defineConfig([
+export default [
+  { ignores: ['**/dist/**', '**/logs/**', 'server/bench/*.csv'] },
+  js.configs.recommended,
   {
-    files: ['**/*.js'],
-    ignores: ['dist/**', 'node_modules/**'],
-    languageOptions: {
-      ecmaVersion: 'latest',
-      sourceType: 'module',
-      globals: globals.browser,
-    },
-    extends: [js.configs.recommended],
-    rules: {
-      'no-console': 'off',
-      'no-unused-vars': ['warn', { argsIgnorePattern: '^_' }],
-    },
+    files: ['client/**/*.js'],
+    languageOptions: { globals: globals.browser },
+    rules: { 'no-console': 'off' },
   },
-]);
+  {
+    files: ['server/**/*.js', 'server/**/*.mjs', 'server/**/*.cjs'],
+    languageOptions: { globals: globals.node },
+    rules: { 'no-console': 'off' },
+  },
+];

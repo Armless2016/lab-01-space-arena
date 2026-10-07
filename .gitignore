@@ -1,6 +1,9 @@
 node_modules
-dist
+client/dist
+server/logs
+server/bench/*.csv
 .DS_Store
 *.local
 .vscode/*
 !.vscode/extensions.json
+npm-debug.log*

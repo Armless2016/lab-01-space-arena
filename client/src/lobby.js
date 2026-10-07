@@ -45,7 +45,7 @@ export class Lobby extends EventTarget {
       this.#rooms = Array.isArray(rooms) ? rooms : [];
       this.dispatchEvent(new CustomEvent('rooms', { detail: { rooms: this.rooms } }));
     } catch (error) {
-      if (signal.aborted && this.#visible) {
+      if (this.#visible) {
         this.dispatchEvent(new CustomEvent('error', { detail: { error } }));
       }
     }

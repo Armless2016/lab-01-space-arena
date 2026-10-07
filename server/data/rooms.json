@@ -1,0 +1,5 @@
+[
+  {"id":"rookie-orbit","name":"Rookie Orbit","maxPlayers":8,"width":960,"height":540,"asteroids":8,"enemies":2,"enemyHp":60},
+  {"id":"ace-belt","name":"Ace Belt","maxPlayers":6,"width":1100,"height":620,"asteroids":12,"enemies":3,"enemyHp":80},
+  {"id":"chaos-nebula","name":"Chaos Nebula","maxPlayers":10,"width":1280,"height":720,"asteroids":18,"enemies":4,"enemyHp":70}
+]

@@ -8,6 +8,7 @@ import { Lobby } from './lobby.js';
 import { createLobbyView } from './lobby-view.js';
 import { createGame } from './game.js';
 import { runFailureGallery, runMicrotaskPuzzles, runPromiseCombinatorsDemo, measureAssetStrategies } from './diagnostics.js';
+import { ReconnectingSocket } from './socket-client.js';
 
 const canvas = document.querySelector('#game');
 const loadingRenderer = createLoadingRenderer(canvas);
@@ -34,6 +35,11 @@ const microtaskButton = document.querySelector('#microtaskBtn');
 const timingButton = document.querySelector('#timingBtn');
 const controls = document.querySelector('#controls');
 const canvasMessage = document.querySelector('#canvasMessage');
+const chatPanel = document.querySelector('#chatPanel');
+const chatMessages = document.querySelector('#chatMessages');
+const chatInput = document.querySelector('#chatInput');
+const chatSendBtn = document.querySelector('#chatSendBtn');
+const socketState = document.querySelector('#socketState');
 
 const hud = createHud({
   root: document.querySelector('#hud'),
@@ -50,6 +56,7 @@ const hud = createHud({
 
 const lobbyView = createLobbyView(lobbyElements);
 const lobby = new Lobby();
+const socketClient = new ReconnectingSocket();
 let game = null;
 let assets = null;
 let loadController = null;
@@ -148,9 +155,44 @@ leaveLobbyButton.addEventListener('click', () => {
   game?.stop();
   game = null;
   controls.hidden = true;
+  chatPanel.hidden = true;
+  socketClient.close();
   hud.hide();
   lobbyPanel.hidden = false;
   void lobby.start();
+});
+
+function addChatLine(text, className = '') {
+  const line = document.createElement('div');
+  line.className = `chat-line ${className}`.trim();
+  line.textContent = text;
+  chatMessages.append(line);
+  chatMessages.scrollTop = chatMessages.scrollHeight;
+}
+
+socketClient.addEventListener('state', (event) => {
+  const { state, delay, reason } = event.detail;
+  socketState.textContent = state === 'reconnecting' ? `reconnecting in ${Math.round(delay)} ms` : state;
+  if (state === 'closed' && reason) addChatLine(`Socket closed: ${reason}`, 'system');
+});
+
+socketClient.addEventListener('message', (event) => {
+  const message = event.detail;
+  if (message.type === 'chat') addChatLine(`${message.playerName}: ${message.message}`);
+  if (message.type === 'system') addChatLine(message.text, 'system');
+  if (message.type === 'error') addChatLine(`Server error: ${message.code}`, 'system');
+});
+
+chatSendBtn.addEventListener('click', () => {
+  const message = chatInput.value.trim();
+  if (!message) return;
+  socketClient.send({ type: 'chat', message });
+  chatInput.value = '';
+  chatInput.focus();
+});
+
+chatInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') chatSendBtn.click();
 });
 
 function startLocalGame({ room, playerName }) {
@@ -158,8 +200,12 @@ function startLocalGame({ room, playerName }) {
   lobbyPanel.hidden = true;
   hud.show();
   controls.hidden = false;
+  chatPanel.hidden = false;
+  chatMessages.replaceChildren();
   hud.setPlayer(playerName);
   hud.setRoom(room.name);
+  socketClient.connect();
+  socketClient.join(room.id, playerName);
 
   game = createGame({
     canvas,
@@ -237,6 +283,7 @@ microtaskButton.addEventListener('click', async () => {
 window.addEventListener('beforeunload', () => {
   lobby.stop();
   game?.stop();
+  socketClient.close();
   loadController?.abort(new DOMException('Page closed', 'AbortError'));
 });
 
