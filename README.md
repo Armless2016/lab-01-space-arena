@@ -1,267 +1,177 @@
-# JavaScript Semester Project — Space Arena
+# Space Arena — JavaScript Semester Project
 
-## Lab 04 — Node.js: EventEmitter, streams, HTTP and WebSocket
+Labs 01–05 build one browser multiplayer game step by step. The client is in `client/`, the Node.js server in `server/`, and **the deterministic simulation and wire codecs shared by both runtimes are in `shared/`**.
 
-This laboratory continues the same Space Arena project from Labs 01–03. The browser client stays in `client/`; the new Node.js server lives in `server/`.
+## Lab 05 — Server-authoritative multiplayer, prediction and binary protocol
 
-### What was added in Lab 04
+### What changed in Lab 05
 
-- Node.js HTTP server built with `node:http`.
-- ESM server modules plus a small CommonJS interoperability example.
-- `Room extends EventEmitter` with handled `error` events.
-- Room storage and cleanup on the server; an empty room is deleted after the last player leaves.
-- `GET /health`, `GET /api/rooms`, `POST /api/rooms` and streamed replay `GET /api/rooms/:id/replay`.
-- Static serving of `client/dist` with traversal protection against `..` path segments.
-- Environment configuration in `server/src/config.js`: `PORT`, `LOG_DIR`, `CLIENT_DIST_DIR`, `WS_MAX_PAYLOAD`, `MAX_MESSAGES_PER_SECOND`.
-- Graceful `SIGINT`/`SIGTERM`: WebSocket clients close, HTTP server stops accepting new requests, room logs are flushed, exit code is 0.
-- WebSocket endpoint `/ws` using the `ws` package.
-- Message validation: unknown type, malformed data and oversized payloads cause a policy/size close.
-- Join must arrive within 5 seconds.
-- Server heartbeat: ping every 15 seconds; two missed pong responses cause disconnect.
-- Message rate limiting per socket.
-- Server-side backpressure guard using `ws.bufferedAmount`; non-critical messages are skipped for a congested client.
-- Client `ReconnectingSocket` wrapper with an outgoing queue and exponential reconnect delay with jitter.
-- Match logging with a `Readable -> Transform -> file` pipeline. Events become NDJSON without building the whole log in memory.
-- Replay uses `createReadStream()` and the same streaming model; the log file is not loaded into RAM as one large string.
-- The existing Lab 03 lobby now receives its room list from the Node server through the Vite proxy. The player can join and use room chat. Ship coordinates are still local; networking is intentionally postponed to Lab 05.
+- The Node.js server owns the world simulation. Clients send only `{ seq, throttle, turn, fire }`; the server rejects input objects with extra properties such as `x`, `y`, `position` or `coordinates`.
+- The simulation is in `shared/simulation.js`. It contains no DOM access, Node imports, `Date.now()` or `Math.random()`. Both Node and the browser import the same integration functions. The asteroid field uses a seeded PRNG initialized from a deterministic room seed.
+- Every room runs at **30 fixed simulation steps/s** (`dt = 1/30`). The scheduler uses a monotonic `performance.now()` deadline and recursive `setTimeout`, not `setInterval`. If the process falls too far behind it caps catch-up work instead of running an unbounded spiral.
+- Every input has a monotonically increasing `seq`. Each personalized snapshot includes `ackSeq`, the last input sequence applied by the server for that player.
+- The client has a baseline mode (prediction disabled) and client prediction + reconciliation. When prediction is enabled, it integrates the player's controls immediately; after a snapshot it replaces its state with the authoritative state and replays inputs newer than `ackSeq`. The remaining visual offset decays smoothly; the exponential correction leaves about 5% of the offset after roughly 100 ms.
+- Other ships are rendered from snapshots about **100 ms in the past**, interpolated between adjacent snapshots. The local ship's projectiles are created immediately on the client; remote projectiles come from the server state.
+- A network diagnostics panel displays RTT, snapshot age, traffic in bytes/s, unacknowledged input queue length, correction distance, dropped packets and protocol mode.
+- Artificial network conditions can be changed while playing: simulated RTT, jitter and packet loss. The configured RTT is split between client-to-server and server-to-client delay. A seeded client PRNG derived from the server-provided room seed and player ID makes the artificial delay/jitter/loss demonstration repeatable.
+- The protocol selector supports binary and JSON modes. JSON is retained as a comparison baseline. An opt-in fault-injection checkbox adds `Math.random()` noise only to the client prediction after integration; correction distance grows, and unchecking it restores deterministic prediction without contaminating the shared server simulation.
 
 ## Project structure
 
 ```text
 .
 ├── client/
-│   ├── public/
-│   │   └── assets/
+│   ├── public/assets/             # Existing Lab 03 sprites and audio
 │   ├── src/
+│   │   ├── network-game.js        # Prediction, reconciliation, interpolation, netgraph
+│   │   ├── socket-client.js       # Reconnecting WebSocket wrapper + binary frames
+│   │   └── ...                    # Labs 01–04 client modules
 │   ├── index.html
-│   ├── vite.config.js
-│   └── package.json
+│   └── vite.config.js             # /api and /ws proxy to Node
 ├── server/
-│   ├── bench/
-│   │   └── rss-backpressure.mjs
-│   ├── data/
-│   │   └── rooms.json
-│   ├── examples/
-│   │   └── commonjs-demo.cjs
 │   ├── src/
-│   │   ├── config.js
-│   │   ├── http.js
-│   │   ├── index.js
-│   │   ├── match-log.js
-│   │   ├── protocol.js
-│   │   ├── request.js
-│   │   ├── rooms.js
-│   │   └── ws-server.js
+│   │   ├── rooms.js               # Room state and target-time 30 Hz scheduler
+│   │   ├── ws-server.js           # Input validation and snapshots
+│   │   └── ...                    # Labs 04 HTTP, stream logging and config
+│   ├── examples/shared-smoke.mjs  # Test the pure simulation and codecs
+│   └── bench/protocol-size.mjs    # JSON vs binary payload measurement
+├── shared/
+│   ├── simulation.js              # Same deterministic simulation in Node and browser
+│   ├── protocol.js                # ArrayBuffer + DataView encoders/decoders
 │   └── package.json
-├── docs/
-│   └── rss-backpressure.svg
-├── .env.example
-├── eslint.config.js
-├── package.json
-└── README.md
+└── docs/
+    └── two-window-demo.gif        # Schematic placeholder; replace with real recording
 ```
 
-## npm workspaces and commands
+## Run locally
 
-The root `package.json` uses npm workspaces:
-
-```json
-"workspaces": ["client", "server"]
-```
-
-Install everything from the repository root:
+Use a current Node.js LTS release. At the repository root:
 
 ```bash
 npm install
-```
-
-Development starts Vite and the Node server together:
-
-```bash
 npm run dev
 ```
 
-The Vite development server is `http://localhost:5173/`. Its `/api` and `/ws` routes are proxied to the Node server on port 3000.
+This starts Vite and the Node server. Open `http://localhost:5173/`. Click through the asset-loading step and choose a room in the lobby. Open a **second browser window** at the same address, enter a different name and join the **same room**. Use WASD/arrow keys to steer and Space to fire.
 
-Build the browser client:
+Useful commands from the root:
 
 ```bash
+npm run test:shared
+npm run bench:protocol
+npm run lint
 npm run build
 ```
 
-Start the production Node server after the client build:
+Production flow:
 
 ```bash
+npm run build
 npm start
 ```
 
-Run lint:
+## Input and snapshot rules
 
-```bash
-npm run lint
-```
-
-## Node.js and environment configuration
-
-The server uses ESM (`"type": "module"`). Node can also load CommonJS with `createRequire()`; `server/examples/commonjs-demo.cjs` is loaded by `server/src/index.js` as the interoperability demonstration.
-
-Configuration is read and validated in `server/src/config.js`:
-
-```text
-PORT=3000
-SERVER_PORT=3000
-LOG_DIR=./server/logs
-CLIENT_DIST_DIR=./client/dist
-WS_MAX_PAYLOAD=16384
-MAX_MESSAGES_PER_SECOND=12
-```
-
-Invalid numeric values cause the server to fail early instead of starting with an invalid configuration.
-
-`node:http` body handling uses `Buffer.concat()` with a maximum request-body size. Static files are resolved against the build directory and requests containing a `..` path segment are rejected.
-
-## libuv event-loop note
-
-The Node event loop is built around libuv. The important phases to recognize for this lab are timers, pending callbacks, poll, check and close callbacks. `setImmediate()` runs in the check phase, while timer callbacks become eligible in the timers phase; exact ordering also depends on what is currently in the poll queue.
-
-## HTTP API
-
-### `GET /health`
-
-Returns a small JSON health object.
-
-### `GET /api/rooms`
-
-Returns current room summaries. The Lab 03 lobby polls this endpoint only while the lobby is visible; each request gets an `AbortSignal.timeout()` on the browser side.
-
-You can verify the API manually from a terminal: `curl.exe http://localhost:3000/health` and `curl.exe -X POST http://localhost:3000/api/rooms -H "Content-Type: application/json" -d "{\"id\":\"training\",\"name\":\"Training Room\"}"`.
-
-### `POST /api/rooms`
-
-Creates a room from JSON configuration, for example:
+The client never sends its coordinates. For example, an input message is:
 
 ```json
-{
-  "id": "training",
-  "name": "Training Room",
-  "maxPlayers": 4,
-  "width": 960,
-  "height": 540,
-  "asteroids": 6,
-  "enemies": 1
-}
+{ "type": "input", "seq": 42, "throttle": 1, "turn": -1, "fire": true }
 ```
 
-### `GET /api/rooms/:id/replay`
+The server validates type, shape, sequence and control ranges. The `shared` module integrates the ship using the server's fixed `dt`. A server snapshot includes the authoritative player, bullet and asteroid arrays and `ackSeq`.
 
-Streams the room's NDJSON match log. The server uses a read stream rather than reading the complete file into memory.
+### Prediction and reconciliation
 
-## Room and WebSocket model
+1. The client samples keyboard controls at 30 Hz, increments `seq`, saves that input in a pending-input history and sends it to the server.
+2. With **prediction enabled**, the client runs `integrateShip()` immediately so the local ship does not wait for a round trip.
+3. When a snapshot arrives, the client measures RTT from the acknowledged input's send time, installs the server's local-ship state, removes inputs with `seq <= ackSeq`, and replays the rest in order.
+4. The difference between the previous displayed position and the replayed position becomes a correction offset. That offset fades over approximately 100 ms rather than snapping instantly.
+5. If prediction is unchecked, the local ship is drawn from snapshots instead. Set simulated RTT to 100 ms and compare both modes to see the input delay directly.
 
-`Room` extends Node's `EventEmitter`. It emits `joined`, `left`, `chat`, `closed`, and can safely emit `error` because an error listener is installed.
+### Remote interpolation
 
-The WebSocket protocol currently contains only:
+The client stores a short buffer of timestamped snapshots. To draw remote ships, it targets a render time 100 ms behind the latest local receive time and interpolates positions and angles between the two snapshots surrounding that time. A small buffer is intentional: it gives the next snapshot time to arrive under typical jitter. More interpolation delay looks smoother but makes remote motion older; less delay is more responsive but more likely to extrapolate or visibly step when packets arrive late.
 
-```text
-join  { type: "join", roomId, playerName }
-leave { type: "leave" }
-chat  { type: "chat", message }
-```
+## Binary protocol: `ArrayBuffer` and `DataView`
 
-Coordinates are deliberately not sent yet; that is the Lab 05 task.
+All multi-byte fields are **little-endian**. The version byte is `1`; the second byte is the frame type (`1` input, `2` snapshot). A signed 16-bit angle maps `[-π, π]` to `[-32767, 32767]`.
 
-The server validates every incoming message before using it. Unknown message types, broken forms and oversized data are rejected. A new socket has 5 seconds to join a room. Each socket is rate-limited to `MAX_MESSAGES_PER_SECOND` messages.
+**Input frame (9 bytes)**
 
-Heartbeat logic follows the usual `ws` ping/pong pattern. The server sends ping frames every 15 seconds. If two consecutive heartbeat checks receive no pong, the socket is terminated.
+| Offset | Field | Encoding |
+|---:|---|---|
+| 0 | version | `uint8` |
+| 1 | type = input | `uint8` |
+| 2 | sequence | `uint32`, little-endian |
+| 6 | throttle | `int8`, scaled by 127 |
+| 7 | turn | `int8`, scaled by 127 |
+| 8 | flags; bit 0 = fire | `uint8` |
 
-On the client, `ReconnectingSocket` keeps outbound messages in a bounded queue and reconnects with an exponential delay plus jitter after an unexpected close.
+**Snapshot frame (21-byte header, then fixed-size records)**
 
-For backpressure, broadcasts check `ws.bufferedAmount`. When it is above 64 KiB, non-critical messages are skipped for that congested socket instead of allowing an ever-growing application-level queue.
+| Offset | Field | Encoding |
+|---:|---|---|
+| 0 | version | `uint8` |
+| 1 | type = snapshot | `uint8` |
+| 2 | server tick | `uint32`, little-endian |
+| 6 | acknowledged input sequence | `uint32`, little-endian |
+| 10 | arena width | `uint16`, little-endian |
+| 12 | arena height | `uint16`, little-endian |
+| 14 | server timestamp for age telemetry | `uint32`, little-endian |
+| 18–20 | player, bullet and asteroid counts | 3 × `uint8` |
 
-## Match log stream
+After the header: each player record is 27 bytes, each bullet record is 26 bytes and each asteroid record is 29 bytes. The binary records keep the movement fields needed for the same authoritative state: bullet velocity, and asteroid velocity, angle, angular velocity and hit points are included too. `shared/protocol.js` checks the version/type and verifies that the frame length exactly matches the counts in the header. Server simulation state never depends on the binary representation; JSON and binary carry the same snapshot information.
 
-A room log is built as a Node stream pipeline:
+## JSON vs binary measurement
 
-```text
-Room event object
-      ↓
-Readable (event source)
-      ↓
-Transform (object → NDJSON line)
-      ↓
-createWriteStream()
-      ↓
-server/logs/<room-id>.ndjson
-```
+Run `npm run bench:protocol` to repeat the comparison on a deterministic sample (2 players, 12 asteroids and 2 bullets). One run of the included sample produced:
 
-The important property is that the pipeline propagates backpressure. The producer does not need to keep a giant in-memory string containing the whole replay.
+| Payload | JSON | Binary | Reduction |
+|---|---:|---:|---:|
+| One input | 62 bytes | 9 bytes | 85.5% |
+| One snapshot sample | 3,251 bytes | 475 bytes | 85.4% |
 
-Replay uses:
+These numbers are for this specific sample and field set, not a promise that every possible game state has the same ratio. JSON remains available via the **Network protocol** selector in the lobby so the two representations can be compared in the same game.
 
-```text
-createReadStream(log)
-      ↓
-HTTP response
-```
+## Network test procedure and GIF
 
-so the large log is streamed to the client instead of loaded into memory at once.
+1. Run `npm run dev` and open `http://localhost:5173/` in two separate browser windows (or one regular and one private window).
+2. Enable audio/load assets in both, choose different player names, choose the same room, and click **Join** in both.
+3. In both windows select binary protocol for the default test. Move and fire; the other ship should be visible in the same arena.
+4. Set simulated RTT to 100 ms. Turn prediction off and move to demonstrate delayed control response; turn it back on and observe immediate local movement plus reconciliation. Enable “Inject Math.random() drift” briefly: correction distance should grow because the client estimate no longer follows the shared deterministic integration. Disable it after observing the effect. Try jitter 60 ms and packet loss 5–10% to see input queue and dropped-packet counters respond.
+5. Record both live windows with a screen recorder such as ScreenToGif, and replace `docs/two-window-demo.gif` with that real recording before final submission.
 
-## RSS / backpressure measurement
+![Two-client preview — schematic placeholder, replace with a live capture](docs/two-window-demo.gif)
 
-The benchmark `server/bench/rss-backpressure.mjs` creates a temporary 16 MB NDJSON-like file and sends it through a deliberately slow `Writable` using a 64 KiB read buffer. During the transfer it samples `process.memoryUsage().rss` and generates:
+The included GIF is intentionally marked as a **schematic placeholder**, not a recording of a running browser session. The submitted README should contain your own live two-window recording after you perform the steps above.
 
-- `server/bench/rss-measurement.csv`
-- `docs/rss-backpressure.svg`
+## Experiment note: latency, divergence, cheating and interpolation
 
-Run it from the repository root:
+**Latency and prediction.** Without prediction, local controls affect the displayed ship only when a server snapshot returns, so the perceived delay grows with network round-trip time. Prediction applies the same fixed-step integration to local input immediately. It feels more responsive, but the client is only estimating: the server remains authoritative. A snapshot can disagree with the estimate because of latency, packet loss, input quantization, a different acknowledged sequence or an implementation bug. Reconciliation replaces the local estimate with the authoritative state and replays only unacknowledged inputs; a smoothed correction hides small differences without allowing the client to decide the official position.
 
-```bash
-npm run bench:memory
-```
+**Determinism and divergence.** `shared/simulation.js` is deliberately free of `Math.random()` and `Date.now()`. Arena randomness is produced from a seed generated by the server and sent with the join response, and simulation advances only in fixed 1/30-second steps. The optional `Math.random()` fault is isolated to the client-side prediction view and must be unchecked for normal play. Both environments use the same integration function and quantized binary controls. This reduces divergence; it does not make a client trusted. Rendering, network arrival times and prediction correction may still differ, so the server's snapshot is the final truth.
 
-A reference run in the prepared workspace consumed the full 16 MB stream with 43 samples. RSS ranged from 26.36 MB to 39.11 MB (12.75 MB warm-up delta). The curve is bounded rather than increasing with every byte of the replay file, which is the expected streaming/backpressure behavior. Exact values vary by Node version, OS and machine.
+**Cheats.** Accepting coordinates from the client would allow a modified client to teleport, move faster, ignore collisions or claim hits that did not happen. The server therefore accepts controls only and calculates positions, bullets, hits and score itself. The client can lie about its local display, but it cannot make the server accept an arbitrary position through the input protocol. Server-side rate limits and bounds checks remain necessary in a production game.
 
-![RSS during slow streamed replay](docs/rss-backpressure.svg)
+**Interpolation choice.** Remote ships are rendered 100 ms behind the latest received snapshot. This gives a buffer of about three 30 Hz ticks for normal jitter, allowing motion to be interpolated instead of jumping from snapshot to snapshot. A larger buffer can look smoother on unstable links but makes opponents visibly older; a smaller buffer looks more current but increases visible stepping when snapshots arrive late. The selected 100 ms is a deliberate compromise for this lab and can be changed via `INTERPOLATION_DELAY_MS` in `client/src/network-game.js`.
 
-## Short note: event loop, 300 ms HTTP handler and `error`
+## Labs 01–04 retained
 
-Node.js runs JavaScript handlers on its main event-loop thread. A synchronous HTTP handler that burns 300 ms of CPU does not only delay its own response: it also delays other callbacks that are ready to run on that same event loop. The fix is to avoid long synchronous work in request handlers and move CPU-heavy work to a worker/threaded design when necessary.
+- **Lab 01:** Vite, modules, Canvas/DPR, closure-based input, fixed timestep, interpolation, HUD and event-loop experiments.
+- **Lab 02:** `Vector2`, `Entity`, `Ship extends Entity`, `Map` world, bullets, collisions, `this`, prototype chain and composition.
+- **Lab 03:** Promise-based asset pipeline, cancellation/retry, loading screen, lobby, Web Audio, event bus and microtask puzzles.
+- **Lab 04:** Node HTTP, `EventEmitter` rooms, WebSocket chat, input validation, streams/backpressure and streamed match logs.
 
-An `EventEmitter` has a special `error` event. If an emitter emits `error` and there is no registered `error` listener, Node treats it as an unhandled error and the process can terminate. In this project `Room` and the room manager install explicit `error` listeners so an emitted error is observed instead of becoming an unhandled process-level failure.
+## Submission — Lab 05
 
-## Lab 04 verification checklist
-
-- [x] `client/` and `server/` split.
-- [x] Node server serves the built client.
-- [x] `..` static-path traversal is rejected.
-- [x] `GET /api/rooms`, `POST /api/rooms`, `GET /health`.
-- [x] Vite `/api` and `/ws` proxy in development.
-- [x] Environment configuration and validation.
-- [x] Graceful shutdown on SIGINT/SIGTERM.
-- [x] `Room extends EventEmitter` and handled `error` event.
-- [x] WebSocket validation, join timeout, ping/pong, rate limit.
-- [x] Server-side `bufferedAmount` guard.
-- [x] Client queued send + reconnect with increasing delay.
-- [x] NDJSON match log through a stream pipeline.
-- [x] Replay through `createReadStream()`.
-- [x] RSS/backpressure graph included.
-
-## Previous labs
-
-Lab 01 added the fixed-step `requestAnimationFrame` loop, accumulator/interpolation, keyboard closure and Canvas rendering.
-
-Lab 02 added `Vector2`, `Entity`, `Ship extends Entity`, `World` with `Map`, collision handling, projectiles, asteroids, private HP, `this` fixes, prototype inspection and composition-based homing/pickups.
-
-Lab 03 added asynchronous asset loading with retries and `AbortSignal`, loading progress, Web Audio, `EventTarget` events, the lobby, Promise combinator experiments, microtask puzzles and failure handling.
-
-## Submission
-
-The same public GitHub repository is used for all semester labs. For this laboratory create and push the `lab-04` tag after the final commit:
+After verifying both windows and completing your live GIF, from the repository root:
 
 ```bash
 git add .
-git commit -m "lab-04: Node server, streams and WebSocket"
+git commit -m "lab-05: authoritative simulation prediction and binary protocol"
 git push origin main
-git tag lab-04
-git push origin lab-04
+git tag lab-05
+git push origin lab-05
 ```
+
+Submit the URL of the same public GitHub repository used for Labs 01–04. The required new tag is `lab-05`.

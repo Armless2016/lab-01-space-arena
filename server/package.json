@@ -1,13 +1,14 @@
 {
   "name": "space-arena-server",
   "private": true,
-  "version": "4.0.0",
+  "version": "5.0.0",
   "type": "module",
   "scripts": {
     "dev": "node --watch src/index.js",
     "start": "node src/index.js"
   },
   "dependencies": {
-    "ws": "^8.18.3"
+    "ws": "^8.18.3",
+    "@space-arena/shared": "5.0.0"
   }
 }

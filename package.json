@@ -1,15 +1,21 @@
 {
   "name": "space-arena-monorepo",
   "private": true,
-  "version": "4.0.0",
+  "version": "5.0.0",
   "type": "module",
-  "workspaces": ["client", "server"],
+  "workspaces": [
+    "client",
+    "server",
+    "shared"
+  ],
   "scripts": {
     "dev": "concurrently -k \"npm run dev -w client\" \"npm run dev -w server\"",
     "build": "npm run build -w client",
     "start": "npm run start -w server",
     "lint": "eslint .",
-    "bench:memory": "node server/bench/rss-backpressure.mjs"
+    "bench:memory": "node server/bench/rss-backpressure.mjs",
+    "test:shared": "node server/examples/shared-smoke.mjs",
+    "bench:protocol": "node server/bench/protocol-size.mjs"
   },
   "devDependencies": {
     "@eslint/js": "latest",

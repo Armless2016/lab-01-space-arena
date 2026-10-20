@@ -24,5 +24,13 @@ export function createHud(elements) {
       elements.frames.textContent = String(stats.framesPerSecond);
       elements.frameTime.textContent = stats.frameTimeMs.toFixed(2);
     },
+    updateNetwork(stats) {
+      elements.hp.textContent = String(stats.hp ?? 0);
+      elements.score.textContent = String(stats.score ?? 0);
+      elements.entities.textContent = String(stats.entities ?? stats.players ?? 0);
+      elements.steps.textContent = String(stats.stepsPerSecond ?? 30);
+      elements.frames.textContent = String(stats.framesPerSecond ?? 0);
+      elements.frameTime.textContent = Number(stats.frameTimeMs ?? 0).toFixed(2);
+    },
   };
 }

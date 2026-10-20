@@ -1,5 +1,6 @@
 import { WebSocketServer } from 'ws';
-import { parseClientMessage, sendJson } from './protocol.js';
+import { encodeSnapshotBinary } from '@space-arena/shared/protocol.js';
+import { decodeInputBinary, parseClientMessage, sendJson } from './protocol.js';
 
 const JOIN_TIMEOUT_MS = 5000;
 const PING_INTERVAL_MS = 15000;
@@ -36,17 +37,54 @@ export function attachWebSocketServer(httpServer, { rooms, config }) {
       socket.destroy();
       return;
     }
-
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit('connection', ws, request);
-    });
+    wss.handleUpgrade(request, socket, head, (ws) => wss.emit('connection', ws, request));
   });
+
+  function sendToClient(ws, payload, { critical = false } = {}) {
+    if (ws.readyState !== 1) return false;
+    if (!critical && ws.bufferedAmount > HIGH_WATER_MARK) return false;
+    const record = ws.room?.players.get(ws);
+    if (payload.type === 'snapshot' && record?.protocol === 'binary') {
+      ws.send(encodeSnapshotBinary(payload), { binary: true });
+      return true;
+    }
+    ws.send(JSON.stringify(payload));
+    return true;
+  }
+
+  function broadcastPlayers(room) {
+    room.broadcast({ type: 'players', players: room.playerList }, (client, payload) => sendToClient(client, payload, { critical: true }));
+  }
+
+  function publishSnapshots(room) {
+    for (const [client, player] of room.players) {
+      if (client.readyState !== 1 || client.bufferedAmount > HIGH_WATER_MARK) continue;
+      const snapshot = room.snapshotFor(player);
+      if (player.protocol === 'binary') client.send(encodeSnapshotBinary(snapshot), { binary: true });
+      else client.send(JSON.stringify(snapshot));
+    }
+  }
+
+  function leaveRoom(ws) {
+    const room = ws.room;
+    if (!room) return;
+    const player = room.leave(ws);
+    if (!player) {
+      ws.room = null;
+      return;
+    }
+    room.broadcast({ type: 'system', text: `${player.name} left` }, (client, payload) => sendToClient(client, payload));
+    ws.room = null;
+    broadcastPlayers(room);
+    void rooms.removeIfEmpty(room);
+  }
 
   wss.on('connection', (ws) => {
     clients.add(ws);
     ws.isAlive = true;
     ws.missedPongs = 0;
     ws.room = null;
+    ws.protocolMode = null;
     ws.joinTimer = setTimeout(() => {
       if (!ws.room) ws.close(1008, 'join required within 5 seconds');
     }, JOIN_TIMEOUT_MS);
@@ -57,29 +95,55 @@ export function attachWebSocketServer(httpServer, { rooms, config }) {
       ws.missedPongs = 0;
     });
 
-    ws.on('message', (data) => {
+    ws.on('message', (data, isBinary) => {
       if (!allowMessage.get(ws)()) {
         ws.close(1008, 'message rate limit exceeded');
         return;
       }
       let message;
       try {
-        message = parseClientMessage(data.toString(), config.wsMaxPayload);
+        if (isBinary) {
+          if (ws.protocolMode !== 'binary' || !ws.room) throw Object.assign(new Error('binary input not negotiated'), { code: 1008 });
+          message = decodeInputBinary(data);
+        } else {
+          message = parseClientMessage(data.toString(), config.wsMaxPayload);
+          if (message.type === 'input' && ws.protocolMode === 'binary') {
+            throw Object.assign(new Error('binary input expected'), { code: 1008 });
+          }
+        }
       } catch (error) {
-        ws.close(error.code || 1008, error.message);
+        ws.close(error.code || 1008, String(error.message || 'invalid message').slice(0, 100));
         return;
       }
 
       if (message.type === 'join') {
+        if (ws.room) leaveRoom(ws);
         const room = rooms.get(message.roomId);
-        if (!room) return sendJson(ws, { type: 'error', code: 'room_not_found' });
-        if (!room.join(ws, message.playerName)) return sendJson(ws, { type: 'error', code: 'room_full' });
+        if (!room) {
+          sendJson(ws, { type: 'error', code: 'room_not_found' });
+          return;
+        }
+        const player = room.join(ws, message.playerName, message.protocol || 'binary');
+        if (!player) {
+          sendJson(ws, { type: 'error', code: 'room_full' });
+          return;
+        }
         ws.room = room;
+        ws.protocolMode = player.protocol;
         clearTimeout(ws.joinTimer);
         ws.joinTimer = null;
-        room.record({ type: 'join', playerName: room.players.get(ws).name });
-        room.broadcast({ type: 'system', text: `${room.players.get(ws).name} joined` }, (client, payload) => sendToClient(client, payload));
-        sendJson(ws, { type: 'joined', room: room.summary });
+        sendJson(ws, {
+          type: 'joined',
+          room: room.summary,
+          playerId: player.playerId,
+          protocol: player.protocol,
+          seed: room.seed,
+          players: room.playerList,
+          snapshot: room.snapshotFor(player),
+        });
+        room.broadcast({ type: 'system', text: `${player.name} joined` }, (client, payload) => sendToClient(client, payload));
+        broadcastPlayers(room);
+        room.startSimulation(publishSnapshots);
         return;
       }
 
@@ -88,12 +152,25 @@ export function attachWebSocketServer(httpServer, { rooms, config }) {
         return;
       }
 
+      if (message.type === 'input') {
+        if (!ws.room) {
+          sendJson(ws, { type: 'error', code: 'join_required' });
+          return;
+        }
+        // Jitter may reorder frames. Stale sequences are ignored, not treated as fatal.
+        ws.room.acceptInput(ws, message);
+        return;
+      }
+
       if (message.type === 'chat') {
-        if (!ws.room) return sendJson(ws, { type: 'error', code: 'join_required' });
-        const playerName = ws.room.players.get(ws)?.name || 'Pilot';
-        ws.room.chat(ws, message.message);
-        ws.room.record({ type: 'chat', playerName, message: message.message });
-        ws.room.broadcast({ type: 'chat', playerName, message: message.message }, (client, payload) => sendToClient(client, payload));
+        if (!ws.room) {
+          sendJson(ws, { type: 'error', code: 'join_required' });
+          return;
+        }
+        const player = ws.room.players.get(ws);
+        if (ws.room.chat(ws, message.message)) {
+          ws.room.broadcast({ type: 'chat', playerName: player?.name || 'Pilot', message: message.message }, (client, payload) => sendToClient(client, payload));
+        }
       }
     });
 
@@ -102,27 +179,8 @@ export function attachWebSocketServer(httpServer, { rooms, config }) {
       leaveRoom(ws);
       clients.delete(ws);
     });
-    ws.on('error', (error) => {
-      console.error('[ws]', error);
-    });
+    ws.on('error', (error) => console.error('[ws]', error));
   });
-
-  function sendToClient(ws, payload, { critical = false } = {}) {
-    if (ws.readyState !== 1) return false;
-    if (!critical && ws.bufferedAmount > HIGH_WATER_MARK) return false;
-    return sendJson(ws, payload);
-  }
-
-  function leaveRoom(ws) {
-    const room = ws.room;
-    if (!room) return;
-    const player = room.players.get(ws);
-    room.leave(ws);
-    room.record({ type: 'leave', playerName: player?.name || 'Pilot' });
-    room.broadcast({ type: 'system', text: `${player?.name || 'Pilot'} left` }, (client, payload) => sendToClient(client, payload));
-    ws.room = null;
-    rooms.removeIfEmpty(room);
-  }
 
   const heartbeat = setInterval(() => {
     for (const ws of clients) {

@@ -1,3 +1,12 @@
+import { decodeSnapshotBinary, encodeInputBinary } from '@space-arena/shared/protocol.js';
+
+function frameSize(frame) {
+  if (typeof frame === 'string') return new TextEncoder().encode(frame).byteLength;
+  if (frame instanceof ArrayBuffer) return frame.byteLength;
+  if (ArrayBuffer.isView(frame)) return frame.byteLength;
+  return 0;
+}
+
 export class ReconnectingSocket extends EventTarget {
   #url;
   #socket = null;
@@ -6,6 +15,7 @@ export class ReconnectingSocket extends EventTarget {
   #timer = null;
   #stopped = false;
   #joined = null;
+  #protocol = 'binary';
 
   constructor(url = '/ws', { maxQueue = 100, maxDelay = 8000 } = {}) {
     super();
@@ -19,21 +29,35 @@ export class ReconnectingSocket extends EventTarget {
     this.#open();
   }
 
-  join(roomId, playerName) {
-    this.#joined = { roomId, playerName };
-    if (this.#socket?.readyState === WebSocket.OPEN) {
-      this.send({ type: 'join', roomId, playerName });
-    }
+  join(roomId, playerName, protocol = 'binary') {
+    this.#protocol = protocol === 'json' ? 'json' : 'binary';
+    this.#joined = { roomId, playerName, protocol: this.#protocol };
+    if (this.#socket?.readyState === WebSocket.OPEN) this.send({ type: 'join', ...this.#joined });
   }
 
   send(payload) {
-    const message = JSON.stringify(payload);
-    if (this.#socket?.readyState === WebSocket.OPEN) {
-      this.#socket.send(message);
-      return;
+    let frame;
+    try {
+      frame = payload?.type === 'input' && this.#protocol === 'binary'
+        ? encodeInputBinary(payload)
+        : JSON.stringify(payload);
+    } catch (error) {
+      this.dispatchEvent(new CustomEvent('error', { detail: { error } }));
+      return 0;
     }
+    const bytes = frameSize(frame);
+    if (this.#socket?.readyState === WebSocket.OPEN) {
+      // Avoid letting a slow peer grow the browser's internal send queue forever.
+      if (this.#socket.bufferedAmount > 64 * 1024 && payload?.type === 'input') return 0;
+      this.#socket.send(frame);
+      return bytes;
+    }
+    // Gameplay inputs are time-sensitive; replaying stale controls after reconnect
+    // would advance the server's sequence beyond the new client's sequence.
+    if (payload?.type === 'input') return 0;
     if (this.#queue.length >= this.maxQueue) this.#queue.shift();
-    this.#queue.push(message);
+    this.#queue.push(frame);
+    return bytes;
   }
 
   close() {
@@ -50,10 +74,15 @@ export class ReconnectingSocket extends EventTarget {
     return this.#socket?.bufferedAmount ?? 0;
   }
 
+  get protocol() {
+    return this.#protocol;
+  }
+
   #open() {
     if (this.#stopped || this.#socket) return;
     this.dispatchEvent(new CustomEvent('state', { detail: { state: 'connecting' } }));
     const socket = new WebSocket(this.#url);
+    socket.binaryType = 'arraybuffer';
     this.#socket = socket;
 
     socket.addEventListener('open', () => {
@@ -64,9 +93,20 @@ export class ReconnectingSocket extends EventTarget {
     });
     socket.addEventListener('message', (event) => {
       try {
-        this.dispatchEvent(new CustomEvent('message', { detail: JSON.parse(event.data) }));
-      } catch {
-        this.dispatchEvent(new CustomEvent('error', { detail: { error: new Error('Invalid server JSON') } }));
+        let message;
+        let bytes;
+        if (event.data instanceof ArrayBuffer || ArrayBuffer.isView(event.data)) {
+          bytes = frameSize(event.data);
+          message = decodeSnapshotBinary(event.data);
+        } else {
+          bytes = frameSize(String(event.data));
+          message = JSON.parse(event.data);
+        }
+        this.dispatchEvent(new CustomEvent('message', {
+          detail: { ...message, __transportBytes: bytes },
+        }));
+      } catch (error) {
+        this.dispatchEvent(new CustomEvent('error', { detail: { error: new Error(`Invalid server frame: ${error.message}`) } }));
       }
     });
     socket.addEventListener('error', () => {

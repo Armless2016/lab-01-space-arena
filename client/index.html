@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="description" content="JavaScript Lab 04 - Node.js server, streams and WebSocket" />
-    <title>Space Arena — Lab 04</title>
+    <meta name="description" content="JavaScript Lab 05 - authoritative multiplayer simulation and binary protocol" />
+    <title>Space Arena — Lab 05</title>
   </head>
   <body>
     <main class="app">
@@ -12,7 +12,7 @@
         <div class="topbar">
           <div>
             <h1>Space Arena</h1>
-            <p>JavaScript Lab 04 · Node.js, EventEmitter, streams and WebSocket</p>
+            <p>JavaScript Lab 05 · Authoritative server, prediction and binary snapshots</p>
           </div>
           <div id="hud" class="hud" aria-label="Game HUD" hidden>
             <span>Player: <strong id="playerName">-</strong></span>
@@ -31,7 +31,7 @@
           <canvas id="game" aria-label="Space game arena"></canvas>
           <div id="canvasMessage" class="canvas-message"></div>
           <div id="controls" class="controls" hidden>
-            WASD / Arrows — move · Space — fire · Esc — back to lobby
+            WASD / Arrows — move · Space — fire · Esc — back to lobby <button id="leaveRoomBtn" type="button">Leave room</button>
           </div>
         </div>
       </section>
@@ -64,6 +64,13 @@
             <label for="roomSelect">Room</label>
             <select id="roomSelect"></select>
           </div>
+          <div>
+            <label for="protocolSelect">Network protocol</label>
+            <select id="protocolSelect">
+              <option value="binary" selected>Binary (DataView)</option>
+              <option value="json">JSON (comparison)</option>
+            </select>
+          </div>
           <button id="joinBtn" class="primary">Join</button>
         </div>
         <div id="roomList" class="room-list"></div>
@@ -82,6 +89,33 @@
           <input id="chatInput" maxlength="500" placeholder="Message the room..." />
           <button id="chatSendBtn" class="primary">Send</button>
         </div>
+      </section>
+
+
+      <section id="networkPanel" class="panel" hidden>
+        <div class="section-heading">
+          <div>
+            <h2>Network lab controls</h2>
+            <p>Input-only protocol: the client sends throttle, turn and fire; the server owns the world state.</p>
+          </div>
+        </div>
+        <div class="network-controls">
+          <label class="check-control"><input id="predictionToggle" type="checkbox" checked /> Client prediction + reconciliation</label>
+          <label class="check-control"><input id="nondeterminismToggle" type="checkbox" /> Inject Math.random() drift (intentional fault)</label>
+          <label>Simulated RTT <output id="latencyValue">100 ms</output><input id="latencyRange" type="range" min="0" max="300" value="100" step="10" /></label>
+          <label>Jitter <output id="jitterValue">20 ms</output><input id="jitterRange" type="range" min="0" max="120" value="20" step="5" /></label>
+          <label>Packet loss <output id="lossValue">0%</output><input id="lossRange" type="range" min="0" max="30" value="0" step="1" /></label>
+        </div>
+        <div class="netgraph" aria-label="Network graph measurements">
+          <span>RTT <strong id="netRtt">0 ms</strong></span>
+          <span>Snapshot age <strong id="netAge">0 ms</strong></span>
+          <span>Traffic <strong id="netBytes">0 B/s</strong></span>
+          <span>Input queue <strong id="netQueue">0</strong></span>
+          <span>Correction <strong id="netCorrection">0 px</strong></span>
+          <span>Dropped packets <strong id="netDropped">0</strong></span>
+          <span>Protocol <strong id="netProtocol">binary</strong></span>
+        </div>
+        <p class="network-hint">To compare baseline and prediction, turn prediction off, increase RTT to 100 ms, then turn prediction back on. Remote ships are rendered about 100 ms in the past.</p>
       </section>
 
       <section id="diagnosticsPanel" class="panel" hidden>

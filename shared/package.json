@@ -1,0 +1,10 @@
+{
+  "name": "@space-arena/shared",
+  "version": "5.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./simulation.js": "./simulation.js",
+    "./protocol.js": "./protocol.js"
+  }
+}

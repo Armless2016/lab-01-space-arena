@@ -6,7 +6,7 @@ import { gameEvents } from './event-bus.js';
 import { createHud } from './hud.js';
 import { Lobby } from './lobby.js';
 import { createLobbyView } from './lobby-view.js';
-import { createGame } from './game.js';
+import { createNetworkGame } from './network-game.js';
 import { runFailureGallery, runMicrotaskPuzzles, runPromiseCombinatorsDemo, measureAssetStrategies } from './diagnostics.js';
 import { ReconnectingSocket } from './socket-client.js';
 
@@ -40,6 +40,26 @@ const chatMessages = document.querySelector('#chatMessages');
 const chatInput = document.querySelector('#chatInput');
 const chatSendBtn = document.querySelector('#chatSendBtn');
 const socketState = document.querySelector('#socketState');
+const protocolSelect = document.querySelector('#protocolSelect');
+const networkPanel = document.querySelector('#networkPanel');
+const predictionToggle = document.querySelector('#predictionToggle');
+const nondeterminismToggle = document.querySelector('#nondeterminismToggle');
+const latencyRange = document.querySelector('#latencyRange');
+const jitterRange = document.querySelector('#jitterRange');
+const lossRange = document.querySelector('#lossRange');
+const latencyValue = document.querySelector('#latencyValue');
+const jitterValue = document.querySelector('#jitterValue');
+const lossValue = document.querySelector('#lossValue');
+const leaveRoomButton = document.querySelector('#leaveRoomBtn');
+const netStats = {
+  rtt: document.querySelector('#netRtt'),
+  age: document.querySelector('#netAge'),
+  bytes: document.querySelector('#netBytes'),
+  queue: document.querySelector('#netQueue'),
+  correction: document.querySelector('#netCorrection'),
+  dropped: document.querySelector('#netDropped'),
+  protocol: document.querySelector('#netProtocol'),
+};
 
 const hud = createHud({
   root: document.querySelector('#hud'),
@@ -151,16 +171,21 @@ lobbyElements.joinButton.addEventListener('click', () => {
   lobby.join(lobbyView.selectedRoomId, lobbyView.playerName);
 });
 
-leaveLobbyButton.addEventListener('click', () => {
+function leaveRoom() {
   game?.stop();
   game = null;
   controls.hidden = true;
   chatPanel.hidden = true;
+  networkPanel.hidden = true;
+  diagnosticsPanel.hidden = false;
   socketClient.close();
   hud.hide();
   lobbyPanel.hidden = false;
   void lobby.start();
-});
+}
+
+leaveLobbyButton.addEventListener('click', leaveRoom);
+leaveRoomButton.addEventListener('click', leaveRoom);
 
 function addChatLine(text, className = '') {
   const line = document.createElement('div');
@@ -178,6 +203,49 @@ socketClient.addEventListener('state', (event) => {
 
 socketClient.addEventListener('message', (event) => {
   const message = event.detail;
+  if (message.type === 'joined') {
+    game?.stop();
+    hud.setPlayer(lobbyView.playerName);
+    hud.setRoom(message.room?.name || 'Room');
+    networkPanel.hidden = false;
+    diagnosticsPanel.hidden = true;
+    const playerNames = message.players || [];
+    game = createNetworkGame({
+      canvas,
+      assets,
+      room: message.room,
+      playerId: message.playerId,
+      seed: message.seed,
+      initialSnapshot: message.snapshot,
+      socketClient,
+      protocol: message.protocol || protocolSelect.value,
+      playerNames,
+      getNetworkSettings: () => ({
+        prediction: predictionToggle.checked,
+        injectNondeterminism: nondeterminismToggle.checked,
+        latency: Number(latencyRange.value),
+        jitter: Number(jitterRange.value),
+        loss: Number(lossRange.value),
+      }),
+      onStats: (stats) => {
+        hud.updateNetwork(stats);
+        hud.setAudioState(audio.state);
+        netStats.rtt.textContent = `${stats.rttMs.toFixed(1)} ms`;
+        netStats.age.textContent = `${stats.snapshotAgeMs.toFixed(1)} ms`;
+        netStats.bytes.textContent = `${Math.round(stats.bytesPerSecond)} B/s`;
+        netStats.queue.textContent = String(stats.inputQueue);
+        netStats.correction.textContent = `${stats.correctionPx.toFixed(1)} px`;
+        netStats.dropped.textContent = String(stats.droppedPackets);
+        netStats.protocol.textContent = stats.protocol;
+      },
+      onLeave: () => leaveRoomButton.click(),
+    });
+    game.start();
+    addChatLine(`Joined ${message.room?.name || 'room'} as player #${message.playerId}`, 'system');
+  }
+  if (game && (message.type === 'snapshot' || message.type === 'players')) {
+    game.handleServerMessage(message, message.__transportBytes || 0);
+  }
   if (message.type === 'chat') addChatLine(`${message.playerName}: ${message.message}`);
   if (message.type === 'system') addChatLine(message.text, 'system');
   if (message.type === 'error') addChatLine(`Server error: ${message.code}`, 'system');
@@ -201,27 +269,14 @@ function startLocalGame({ room, playerName }) {
   hud.show();
   controls.hidden = false;
   chatPanel.hidden = false;
+  networkPanel.hidden = true;
   chatMessages.replaceChildren();
   hud.setPlayer(playerName);
   hud.setRoom(room.name);
   socketClient.connect();
-  socketClient.join(room.id, playerName);
-
-  game = createGame({
-    canvas,
-    assets,
-    room,
-    playerName,
-    onLeave: () => {
-      leaveLobbyButton.click();
-    },
-    onStats: (stats) => {
-      if (game) hud.update(game.world, stats);
-      hud.setAudioState(audio.state);
-    },
-  });
-  game.start();
+  socketClient.join(room.id, playerName, protocolSelect.value);
 }
+
 
 gameEvents.addEventListener('fired', () => {
   audio.play('fire', { volume: 0.12, rate: 0.94 + Math.random() * 0.12 });
@@ -279,6 +334,17 @@ microtaskButton.addEventListener('click', async () => {
     microtaskButton.disabled = false;
   }
 });
+
+function updateNetworkControlLabels() {
+  latencyValue.textContent = `${latencyRange.value} ms`;
+  jitterValue.textContent = `${jitterRange.value} ms`;
+  lossValue.textContent = `${lossRange.value}%`;
+}
+
+for (const control of [latencyRange, jitterRange, lossRange]) {
+  control.addEventListener('input', updateNetworkControlLabels);
+}
+updateNetworkControlLabels();
 
 window.addEventListener('beforeunload', () => {
   lobby.stop();

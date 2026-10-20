@@ -45,7 +45,7 @@ h1 { font-size: 1.55rem; }
 .panel button:hover, .diagnostic-buttons button:hover { background: #172440; }
 .panel .primary { background: #214b71; }
 .output { overflow-x: auto; margin: 16px 0 0; min-height: 90px; border: 1px solid rgba(255,255,255,.08); border-radius: 10px; padding: 14px; color: #d6e1f5; background: #050914; white-space: pre-wrap; }
-.lobby-grid { display: grid; grid-template-columns: 1fr 1.3fr auto; align-items: end; gap: 12px; margin-top: 18px; }
+.lobby-grid { display: grid; grid-template-columns: 1fr 1.3fr 1fr auto; align-items: end; gap: 12px; margin-top: 18px; }
 .lobby-grid label { display: block; margin-bottom: 7px; color: #a9b8d6; font-size: 0.8rem; }
 .lobby-grid input, .lobby-grid select { width: 100%; border: 1px solid rgba(255,255,255,.12); border-radius: 9px; padding: 10px 12px; color: #edf5ff; background: #08101f; outline: none; }
 .room-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 18px; }
@@ -60,3 +60,17 @@ h1 { font-size: 1.55rem; }
   .room-list { grid-template-columns: 1fr; }
 }
 @media (max-width: 720px) { .app { padding: 12px; } .canvas-wrap { min-height: 320px; } }
+
+.controls button { margin-left: 8px; border: 1px solid rgba(255,255,255,.16); border-radius: 7px; padding: 5px 8px; color: #eaf2ff; background: #162c49; font-size: .74rem; }
+.network-controls { display: grid; grid-template-columns: 1.5fr repeat(3, 1fr); gap: 14px; margin-top: 18px; }
+.network-controls label { display: flex; flex-direction: column; gap: 8px; color: #a9b8d6; font-size: .82rem; }
+.network-controls output { color: #eaf2ff; font-weight: 700; }
+.network-controls input[type="range"] { width: 100%; accent-color: #69d2ff; }
+.network-controls .check-control { display: flex; flex-direction: row; align-items: center; align-self: center; }
+.network-controls input[type="checkbox"] { accent-color: #69d2ff; }
+.netgraph { display: grid; grid-template-columns: repeat(4, minmax(100px, 1fr)); gap: 9px; margin-top: 18px; }
+.netgraph span { display: flex; flex-direction: column; gap: 5px; border: 1px solid rgba(255,255,255,.1); border-radius: 10px; padding: 10px 12px; color: #8fa0bc; font-size: .77rem; background: rgba(255,255,255,.025); }
+.netgraph strong { color: #eaf2ff; font-size: .95rem; }
+.network-hint { margin-top: 14px !important; }
+@media (max-width: 840px) { .network-controls { grid-template-columns: 1fr 1fr; } .netgraph { grid-template-columns: repeat(2, minmax(100px, 1fr)); } }
+@media (max-width: 520px) { .network-controls { grid-template-columns: 1fr; } }

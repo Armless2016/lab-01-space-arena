@@ -1,7 +1,7 @@
 {
   "name": "space-arena-client",
   "private": true,
-  "version": "4.0.0",
+  "version": "5.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
@@ -10,5 +10,8 @@
   },
   "devDependencies": {
     "vite": "latest"
+  },
+  "dependencies": {
+    "@space-arena/shared": "5.0.0"
   }
 }
