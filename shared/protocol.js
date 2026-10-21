@@ -1,12 +1,13 @@
-/** Binary wire protocol. All multi-byte values are little-endian. */
-export const PROTOCOL_VERSION = 1;
+/** Binary wire protocol v3. All multi-byte values are little-endian. */
+export const PROTOCOL_VERSION = 3;
 export const FRAME_INPUT = 1;
 export const FRAME_SNAPSHOT = 2;
 
-const HEADER_BYTES = 21;
-const SHIP_BYTES = 27;
-const BULLET_BYTES = 26;
-const ASTEROID_BYTES = 29;
+const HEADER_BYTES = 23;
+const SHIP_BYTES = 30;
+const BULLET_BYTES = 27;
+const ASTEROID_BYTES = 30;
+const PICKUP_BYTES = 15;
 
 function asDataView(source) {
   if (source instanceof DataView) return source;
@@ -25,6 +26,11 @@ function normalizedAngleToInt16(angle) {
 
 function int16ToAngle(value) {
   return (value / 32767) * Math.PI;
+}
+
+function safeByte(value, fallback = 0) {
+  const number = Number(value);
+  return Math.max(0, Math.min(255, Math.round(Number.isFinite(number) ? number : fallback)));
 }
 
 export function encodeInputBinary(input) {
@@ -56,11 +62,48 @@ export function decodeInputBinary(source) {
   };
 }
 
+function writeShip(view, offset, ship) {
+  view.setUint16(offset, Number(ship.id) & 0xffff, true); offset += 2;
+  view.setFloat32(offset, Number(ship.x) || 0, true); offset += 4;
+  view.setFloat32(offset, Number(ship.y) || 0, true); offset += 4;
+  view.setFloat32(offset, Number(ship.vx) || 0, true); offset += 4;
+  view.setFloat32(offset, Number(ship.vy) || 0, true); offset += 4;
+  view.setInt16(offset, normalizedAngleToInt16(ship.angle), true); offset += 2;
+  view.setUint8(offset, safeByte(ship.hp, 100)); offset += 1;
+  view.setUint8(offset, safeByte(ship.maxHp, 100)); offset += 1;
+  view.setUint16(offset, Math.max(0, Math.min(65535, Math.round(ship.score || 0))), true); offset += 2;
+  view.setFloat32(offset, Math.max(0, Number(ship.fireCooldown) || 0), true); offset += 4;
+  view.setUint16(offset, Math.max(0, Math.min(65535, Math.round(ship.shotsFired || 0))), true); offset += 2;
+  return offset;
+}
+
+function readShip(view, offset, defaultRadius) {
+  const ship = { id: view.getUint16(offset, true) }; offset += 2;
+  ship.x = view.getFloat32(offset, true); offset += 4;
+  ship.y = view.getFloat32(offset, true); offset += 4;
+  ship.vx = view.getFloat32(offset, true); offset += 4;
+  ship.vy = view.getFloat32(offset, true); offset += 4;
+  ship.angle = int16ToAngle(view.getInt16(offset, true)); offset += 2;
+  ship.hp = view.getUint8(offset); offset += 1;
+  ship.maxHp = view.getUint8(offset); offset += 1;
+  ship.score = view.getUint16(offset, true); offset += 2;
+  ship.fireCooldown = view.getFloat32(offset, true); offset += 4;
+  ship.shotsFired = view.getUint16(offset, true); offset += 2;
+  ship.radius = defaultRadius;
+  return { ship, offset };
+}
+
 export function encodeSnapshotBinary(snapshot) {
   const players = (snapshot.players || []).slice(0, 255);
   const bullets = (snapshot.bullets || []).slice(0, 255);
   const asteroids = (snapshot.asteroids || []).slice(0, 255);
-  const totalBytes = HEADER_BYTES + players.length * SHIP_BYTES + bullets.length * BULLET_BYTES + asteroids.length * ASTEROID_BYTES;
+  const pickups = (snapshot.pickups || []).slice(0, 255);
+  const enemies = (snapshot.enemies || []).slice(0, 255);
+  const totalBytes = HEADER_BYTES
+    + (players.length + enemies.length) * SHIP_BYTES
+    + bullets.length * BULLET_BYTES
+    + asteroids.length * ASTEROID_BYTES
+    + pickups.length * PICKUP_BYTES;
   const buffer = new ArrayBuffer(totalBytes);
   const view = new DataView(buffer);
   view.setUint8(0, PROTOCOL_VERSION);
@@ -73,18 +116,11 @@ export function encodeSnapshotBinary(snapshot) {
   view.setUint8(18, players.length);
   view.setUint8(19, bullets.length);
   view.setUint8(20, asteroids.length);
+  view.setUint8(21, pickups.length);
+  view.setUint8(22, enemies.length);
+
   let offset = HEADER_BYTES;
-  for (const ship of players) {
-    view.setUint16(offset, Number(ship.id) & 0xffff, true); offset += 2;
-    view.setFloat32(offset, Number(ship.x) || 0, true); offset += 4;
-    view.setFloat32(offset, Number(ship.y) || 0, true); offset += 4;
-    view.setFloat32(offset, Number(ship.vx) || 0, true); offset += 4;
-    view.setFloat32(offset, Number(ship.vy) || 0, true); offset += 4;
-    view.setInt16(offset, normalizedAngleToInt16(ship.angle), true); offset += 2;
-    view.setUint8(offset, Math.max(0, Math.min(100, Math.round(ship.hp ?? 100)))); offset += 1;
-    view.setUint16(offset, Math.max(0, Math.min(65535, Math.round(ship.score || 0))), true); offset += 2;
-    view.setFloat32(offset, Math.max(0, Number(ship.fireCooldown) || 0), true); offset += 4;
-  }
+  for (const ship of players) offset = writeShip(view, offset, ship);
   for (const bullet of bullets) {
     view.setUint16(offset, Number(bullet.id) & 0xffff, true); offset += 2;
     view.setUint16(offset, Number(bullet.ownerId) & 0xffff, true); offset += 2;
@@ -94,6 +130,7 @@ export function encodeSnapshotBinary(snapshot) {
     view.setFloat32(offset, Number(bullet.vy) || 0, true); offset += 4;
     view.setInt16(offset, normalizedAngleToInt16(bullet.angle), true); offset += 2;
     view.setFloat32(offset, Math.max(0, Number(bullet.ttl) || 0), true); offset += 4;
+    view.setUint8(offset, bullet.homing ? 1 : 0); offset += 1;
   }
   for (const asteroid of asteroids) {
     view.setUint16(offset, Number(asteroid.id) & 0xffff, true); offset += 2;
@@ -104,40 +141,50 @@ export function encodeSnapshotBinary(snapshot) {
     view.setInt16(offset, normalizedAngleToInt16(asteroid.angle), true); offset += 2;
     view.setFloat32(offset, Number(asteroid.angularVelocity) || 0, true); offset += 4;
     view.setFloat32(offset, Math.max(1, Number(asteroid.radius) || 20), true); offset += 4;
-    view.setUint8(offset, Math.max(0, Math.min(255, Math.round(asteroid.hp ?? 100)))); offset += 1;
+    view.setUint8(offset, safeByte(asteroid.hp, 40)); offset += 1;
+    view.setUint8(offset, safeByte(asteroid.maxHp, 40)); offset += 1;
   }
+  for (const pickup of pickups) {
+    view.setUint16(offset, Number(pickup.id) & 0xffff, true); offset += 2;
+    view.setFloat32(offset, Number(pickup.x) || 0, true); offset += 4;
+    view.setFloat32(offset, Number(pickup.y) || 0, true); offset += 4;
+    view.setFloat32(offset, Math.max(1, Number(pickup.radius) || 17), true); offset += 4;
+    view.setUint8(offset, pickup.active ? 1 : 0); offset += 1;
+  }
+  for (const enemy of enemies) offset = writeShip(view, offset, enemy);
   return buffer;
 }
 
 export function decodeSnapshotBinary(source) {
   const view = asDataView(source);
   if (view.byteLength < HEADER_BYTES) throw new Error('binary snapshot is too short');
-  if (view.getUint8(0) !== PROTOCOL_VERSION || view.getUint8(1) !== FRAME_SNAPSHOT) throw new Error('unsupported binary snapshot version/type');
-  const serverTimeMs = view.getUint32(14, true);
+  if (view.getUint8(0) !== PROTOCOL_VERSION || view.getUint8(1) !== FRAME_SNAPSHOT) {
+    throw new Error('unsupported binary snapshot version/type');
+  }
   const playerCount = view.getUint8(18);
   const bulletCount = view.getUint8(19);
   const asteroidCount = view.getUint8(20);
-  const expected = HEADER_BYTES + playerCount * SHIP_BYTES + bulletCount * BULLET_BYTES + asteroidCount * ASTEROID_BYTES;
+  const pickupCount = view.getUint8(21);
+  const enemyCount = view.getUint8(22);
+  const expected = HEADER_BYTES
+    + (playerCount + enemyCount) * SHIP_BYTES
+    + bulletCount * BULLET_BYTES
+    + asteroidCount * ASTEROID_BYTES
+    + pickupCount * PICKUP_BYTES;
   if (view.byteLength !== expected) throw new Error('binary snapshot length does not match its header');
+
   const snapshot = {
     type: 'snapshot', version: PROTOCOL_VERSION,
-    tick: view.getUint32(2, true), ackSeq: view.getUint32(6, true), serverTimeMs,
+    tick: view.getUint32(2, true), ackSeq: view.getUint32(6, true),
+    serverTimeMs: view.getUint32(14, true),
     width: view.getUint16(10, true), height: view.getUint16(12, true),
-    players: [], bullets: [], asteroids: [],
+    players: [], bullets: [], asteroids: [], pickups: [], enemies: [],
   };
   let offset = HEADER_BYTES;
   for (let index = 0; index < playerCount; index += 1) {
-    const ship = { id: view.getUint16(offset, true) }; offset += 2;
-    ship.x = view.getFloat32(offset, true); offset += 4;
-    ship.y = view.getFloat32(offset, true); offset += 4;
-    ship.vx = view.getFloat32(offset, true); offset += 4;
-    ship.vy = view.getFloat32(offset, true); offset += 4;
-    ship.angle = int16ToAngle(view.getInt16(offset, true)); offset += 2;
-    ship.hp = view.getUint8(offset); offset += 1;
-    ship.score = view.getUint16(offset, true); offset += 2;
-    ship.fireCooldown = view.getFloat32(offset, true); offset += 4;
-    ship.radius = 16;
-    snapshot.players.push(ship);
+    const record = readShip(view, offset, 16);
+    snapshot.players.push(record.ship);
+    offset = record.offset;
   }
   for (let index = 0; index < bulletCount; index += 1) {
     const bullet = { id: view.getUint16(offset, true) }; offset += 2;
@@ -148,6 +195,7 @@ export function decodeSnapshotBinary(source) {
     bullet.vy = view.getFloat32(offset, true); offset += 4;
     bullet.angle = int16ToAngle(view.getInt16(offset, true)); offset += 2;
     bullet.ttl = view.getFloat32(offset, true); offset += 4;
+    bullet.homing = Boolean(view.getUint8(offset)); offset += 1;
     bullet.radius = 4;
     snapshot.bullets.push(bullet);
   }
@@ -161,14 +209,29 @@ export function decodeSnapshotBinary(source) {
     asteroid.angularVelocity = view.getFloat32(offset, true); offset += 4;
     asteroid.radius = view.getFloat32(offset, true); offset += 4;
     asteroid.hp = view.getUint8(offset); offset += 1;
+    asteroid.maxHp = view.getUint8(offset); offset += 1;
     snapshot.asteroids.push(asteroid);
+  }
+  for (let index = 0; index < pickupCount; index += 1) {
+    const pickup = { id: view.getUint16(offset, true) }; offset += 2;
+    pickup.x = view.getFloat32(offset, true); offset += 4;
+    pickup.y = view.getFloat32(offset, true); offset += 4;
+    pickup.radius = view.getFloat32(offset, true); offset += 4;
+    pickup.active = Boolean(view.getUint8(offset)); offset += 1;
+    snapshot.pickups.push(pickup);
+  }
+  for (let index = 0; index < enemyCount; index += 1) {
+    const record = readShip(view, offset, 18);
+    snapshot.enemies.push(record.ship);
+    offset = record.offset;
   }
   return snapshot;
 }
 
 export function binarySnapshotSize(snapshot) {
   return HEADER_BYTES
-    + Math.min(255, snapshot.players?.length || 0) * SHIP_BYTES
+    + (Math.min(255, snapshot.players?.length || 0) + Math.min(255, snapshot.enemies?.length || 0)) * SHIP_BYTES
     + Math.min(255, snapshot.bullets?.length || 0) * BULLET_BYTES
-    + Math.min(255, snapshot.asteroids?.length || 0) * ASTEROID_BYTES;
+    + Math.min(255, snapshot.asteroids?.length || 0) * ASTEROID_BYTES
+    + Math.min(255, snapshot.pickups?.length || 0) * PICKUP_BYTES;
 }

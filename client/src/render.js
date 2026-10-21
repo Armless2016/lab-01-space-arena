@@ -27,7 +27,7 @@ export function createRenderer(canvas) {
     assets.pickup = loaded.pickup;
   }
 
-  function drawSprite(image, frame, frameCount, x, y, size, angle = 0) {
+  function drawSprite(image, frame, frameCount, x, y, size, angle = 0, enemyTint = false) {
     if (!image) return false;
     const frameWidth = image.width / frameCount;
     const frameHeight = image.height;
@@ -35,6 +35,7 @@ export function createRenderer(canvas) {
     context.translate(x, y);
     context.rotate(angle);
     context.imageSmoothingEnabled = false;
+    if (enemyTint) context.filter = 'hue-rotate(145deg) saturate(1.7)';
     context.drawImage(
       image,
       frame * frameWidth,
@@ -77,10 +78,11 @@ export function createRenderer(canvas) {
       const x = entity.previousPosition.x + (entity.position.x - entity.previousPosition.x) * alpha;
       const y = entity.previousPosition.y + (entity.position.y - entity.previousPosition.y) * alpha;
 
-      if (entity.kind === 'ship') {
+      if (entity.kind === 'ship' || entity.kind === 'enemy') {
         const frame = Math.floor(performance.now() / 130) % 4;
-        if (!drawSprite(assets.ship, frame, 4, x, y, 58, entity.angle)) {
-          context.fillStyle = entity.isPlayer ? '#72d6ff' : '#ff778e';
+        const isEnemy = entity.kind === 'enemy';
+        if (!drawSprite(assets.ship, frame, 4, x, y, 58, entity.angle, isEnemy)) {
+          context.fillStyle = isEnemy ? '#ff536f' : entity.isPlayer ? '#72d6ff' : '#bca7ff';
           context.beginPath();
           context.moveTo(x + 22, y);
           context.lineTo(x - 15, y - 13);
@@ -88,6 +90,30 @@ export function createRenderer(canvas) {
           context.lineTo(x - 15, y + 13);
           context.closePath();
           context.fill();
+        }
+        // Keep enemies visually unmistakable even when a spritesheet has pale/white frames.
+        if (isEnemy) {
+          context.save();
+          context.strokeStyle = '#ff536f';
+          context.lineWidth = 2;
+          context.beginPath();
+          context.arc(x, y, 25, 0, Math.PI * 2);
+          context.stroke();
+          context.fillStyle = '#ff8095';
+          context.font = '700 9px system-ui';
+          context.textAlign = 'center';
+          context.fillText('ENEMY', x, y - 29);
+          context.restore();
+        }
+        if (isEnemy || !entity.isPlayer) {
+          const maxHp = Math.max(1, Number(entity.maxHp) || 100);
+          const ratio = Math.max(0, Math.min(1, Number(entity.hp ?? maxHp) / maxHp));
+          const barWidth = 34;
+          const barY = y + 24;
+          context.fillStyle = 'rgba(0,0,0,0.65)';
+          context.fillRect(x - barWidth / 2, barY, barWidth, 4);
+          context.fillStyle = isEnemy ? '#ff536f' : '#72d6ff';
+          context.fillRect(x - barWidth / 2, barY, barWidth * ratio, 4);
         }
       } else if (entity.kind === 'bullet') {
         const frame = entity.isHoming ? Math.floor(performance.now() / 80) % 4 : 0;
@@ -104,24 +130,37 @@ export function createRenderer(canvas) {
           context.arc(x, y, entity.radius, 0, Math.PI * 2);
           context.fill();
         }
+        const maxHp = Math.max(1, Number(entity.maxHp) || 40);
+        const ratio = Math.max(0, Math.min(1, Number(entity.hp ?? maxHp) / maxHp));
+        const barWidth = Math.max(22, entity.radius * 1.6);
+        const barY = y + entity.radius + 5;
+        context.fillStyle = 'rgba(0,0,0,0.65)';
+        context.fillRect(x - barWidth / 2, barY, barWidth, 3);
+        context.fillStyle = ratio > 0.5 ? '#9bdfb1' : '#ffbf69';
+        context.fillRect(x - barWidth / 2, barY, barWidth * ratio, 3);
       } else if (entity.kind === 'pickup') {
         const pulse = 1 + Math.sin(entity.pulse) * 0.08;
-        if (!drawSprite(assets.pickup, Math.floor(performance.now() / 150) % 4, 4, x, y, 34 * pulse)) {
-          context.strokeStyle = '#76f0a6';
-          context.lineWidth = 3;
-          context.beginPath();
-          context.arc(x, y, 12 * pulse, 0, Math.PI * 2);
-          context.stroke();
-          context.beginPath();
-          context.moveTo(x - 6, y);
-          context.lineTo(x + 6, y);
-          context.moveTo(x, y - 6);
-          context.lineTo(x, y + 6);
-          context.stroke();
-        }
+        drawSprite(assets.pickup, Math.floor(performance.now() / 150) % 4, 4, x, y, entity.radius * 2 * pulse);
+        // Always add a green ring and plus sign over the spritesheet so the pickup
+        // remains readable even if the source sprite has no transparent background.
+        context.save();
+        context.strokeStyle = '#76f0a6';
+        context.lineWidth = 2.5;
+        context.shadowColor = '#42ff9a';
+        context.shadowBlur = 10;
+        context.beginPath();
+        context.arc(x, y, entity.radius * 0.72 * pulse, 0, Math.PI * 2);
+        context.stroke();
+        context.beginPath();
+        context.moveTo(x - 7, y);
+        context.lineTo(x + 7, y);
+        context.moveTo(x, y - 7);
+        context.lineTo(x, y + 7);
+        context.stroke();
+        context.restore();
       } else if (entity.kind === 'particle') {
         context.globalAlpha = entity.alpha;
-        context.fillStyle = '#ffd477';
+        context.fillStyle = entity.color || '#ffd477';
         context.beginPath();
         context.arc(x, y, entity.size, 0, Math.PI * 2);
         context.fill();

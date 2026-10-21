@@ -1,7 +1,7 @@
 {
   "name": "space-arena-monorepo",
   "private": true,
-  "version": "5.0.0",
+  "version": "6.0.0",
   "type": "module",
   "workspaces": [
     "client",
@@ -14,13 +14,19 @@
     "start": "npm run start -w server",
     "lint": "eslint .",
     "bench:memory": "node server/bench/rss-backpressure.mjs",
-    "test:shared": "node server/examples/shared-smoke.mjs",
-    "bench:protocol": "node server/bench/protocol-size.mjs"
+    "test:shared": "tsx server/examples/shared-smoke.ts",
+    "bench:protocol": "tsx server/bench/protocol-size.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
     "@eslint/js": "latest",
     "concurrently": "latest",
     "eslint": "latest",
-    "globals": "latest"
+    "globals": "latest",
+    "@types/node": "^22.15.0",
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.8.3",
+    "tsx": "^4.19.3",
+    "typescript-eslint": "^8.29.0"
   }
 }

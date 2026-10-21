@@ -7,3 +7,5 @@ server/bench/*.csv
 .vscode/*
 !.vscode/extensions.json
 npm-debug.log*
+
+.env

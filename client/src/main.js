@@ -291,6 +291,10 @@ gameEvents.addEventListener('exploded', () => {
   audio.play('explosion', { volume: 0.16, rate: 0.9 + Math.random() * 0.2 });
 });
 
+gameEvents.addEventListener('pickup', () => {
+  audio.play('pickup', { volume: 0.2, rate: 1.05 + Math.random() * 0.15 });
+});
+
 gameEvents.addEventListener('respawned', () => {
   audio.play('pickup', { volume: 0.16, rate: 1.15 });
 });

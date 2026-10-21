@@ -1,4 +1,5 @@
 import { createRenderer } from './render.js';
+import { emitGameEvent } from './event-bus.js';
 import {
   SIM_DT,
   cloneShip,
@@ -37,8 +38,10 @@ function copySnapshot(snapshot) {
   return {
     ...snapshot,
     players: (snapshot.players || []).map((item) => ({ ...item })),
+    enemies: (snapshot.enemies || []).map((item) => ({ ...item })),
     bullets: (snapshot.bullets || []).map((item) => ({ ...item })),
     asteroids: (snapshot.asteroids || []).map((item) => ({ ...item })),
+    pickups: (snapshot.pickups || []).map((item) => ({ ...item })),
   };
 }
 
@@ -51,11 +54,11 @@ function entityForRenderer(kind, source, x, y, scale, isPlayer = false) {
     previousPosition: position,
     dead: false,
     angle: Number(source.angle) || 0,
-    radius: (Number(source.radius) || (kind === 'ship' ? 16 : 4)) * scale,
+    radius: (Number(source.radius) || (kind === 'ship' ? 16 : kind === 'enemy' ? 18 : kind === 'pickup' ? 17 : 4)) * scale,
     isPlayer,
-    isHoming: false,
+    isHoming: Boolean(source.homing),
     spriteFrame: Number(source.id || 0) % 4,
-    pulse: 0,
+    pulse: kind === 'pickup' ? performance.now() / 250 : 0,
     alpha: 1,
     size: 2,
   };
@@ -87,6 +90,7 @@ export function createNetworkGame({
   const scheduledTimers = new Set();
   const names = new Map(playerNames.map((item) => [item.playerId, item.name]));
   const localBullets = [];
+  const effects = [];
   let authoritative = null;
   let prediction = null;
   let correction = { x: 0, y: 0 };
@@ -110,6 +114,7 @@ export function createNetworkGame({
   let localFireCooldown = 0;
 
   const firstSnapshot = copySnapshot(initialSnapshot);
+  let localShotsFired = Number(firstSnapshot.players.find((ship) => ship.id === playerId)?.shotsFired) || 0;
   const firstShip = firstSnapshot.players.find((ship) => ship.id === playerId);
   if (!firstShip) throw new Error('Initial server snapshot does not contain this player');
   authoritative = cloneShip(firstShip);
@@ -166,11 +171,96 @@ export function createNetworkGame({
     schedule(() => applySnapshot(snapshot), networkDelay());
   }
 
+  function spawnExplosion(x, y, count = 18, color = '#ffd477') {
+    for (let index = 0; index < count; index += 1) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 45 + Math.random() * 170;
+      const life = 0.28 + Math.random() * 0.55;
+      effects.push({
+        x, y,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life,
+        maxLife: life,
+        size: 1.4 + Math.random() * 2.8,
+        color,
+      });
+    }
+  }
+
+  function updateEffects(dt) {
+    for (const effect of effects) {
+      effect.x = ((effect.x + effect.vx * dt) % room.width + room.width) % room.width;
+      effect.y = ((effect.y + effect.vy * dt) % room.height + room.height) % room.height;
+      effect.life -= dt;
+    }
+    for (let index = effects.length - 1; index >= 0; index -= 1) {
+      if (effects[index].life <= 0) effects.splice(index, 1);
+    }
+  }
+
+  function emitSnapshotAudioEvents(previousSnapshot, snapshot) {
+    const previousBulletKeys = new Set((previousSnapshot.bullets || []).map((bullet) => `${bullet.ownerId}:${bullet.id}`));
+    for (const bullet of snapshot.bullets || []) {
+      const key = `${bullet.ownerId}:${bullet.id}`;
+      if (!previousBulletKeys.has(key) && bullet.ownerId !== playerId) {
+        emitGameEvent('fired', { ownerId: bullet.ownerId, remote: true });
+      }
+    }
+
+    const previousPickupMap = new Map((previousSnapshot.pickups || []).map((pickup) => [pickup.id, pickup]));
+    let collectedPickup = false;
+    for (const pickup of snapshot.pickups || []) {
+      const previous = previousPickupMap.get(pickup.id);
+      if (previous?.active && !pickup.active) {
+        collectedPickup = true;
+        spawnExplosion(pickup.x, pickup.y, 8, '#76f0a6');
+        emitGameEvent('pickup', { pickupId: pickup.id });
+      }
+    }
+
+    const previousShips = new Map([
+      ...(previousSnapshot.players || []),
+      ...(previousSnapshot.enemies || []),
+    ].map((ship) => [ship.id, ship]));
+    const currentShips = [
+      ...(snapshot.players || []),
+      ...(snapshot.enemies || []),
+    ];
+    for (const ship of currentShips) {
+      const previous = previousShips.get(ship.id);
+      if (!previous) continue;
+      const healthDelta = Number(ship.hp) - Number(previous.hp);
+      const dx = shortestWrappedDelta(previous.x, ship.x, room.width);
+      const dy = shortestWrappedDelta(previous.y, ship.y, room.height);
+      const teleported = Math.hypot(dx, dy) > 100;
+      if (healthDelta < 0) emitGameEvent('hit', { playerId: ship.id, damage: -healthDelta });
+      if (previous.hp > 0 && ship.hp <= 0) {
+        spawnExplosion(ship.x, ship.y, 26, ship.id >= 60000 ? '#ff7189' : '#ffd477');
+        emitGameEvent('exploded', { playerId: ship.id });
+      }
+      if (healthDelta > 0 && !teleported && !collectedPickup) {
+        emitGameEvent('hit', { playerId: ship.id, damage: -healthDelta });
+      }
+      if (teleported && ship.hp >= previous.hp) emitGameEvent('respawned', { playerId: ship.id });
+    }
+
+    const nextAsteroidIds = new Set((snapshot.asteroids || []).map((asteroid) => asteroid.id));
+    for (const asteroid of previousSnapshot.asteroids || []) {
+      if (!nextAsteroidIds.has(asteroid.id)) {
+        spawnExplosion(asteroid.x, asteroid.y, 20, '#c7d3e7');
+        emitGameEvent('exploded', { asteroidId: asteroid.id });
+      }
+    }
+  }
+
   function applySnapshot(rawSnapshot) {
     if (!running) return;
     const snapshot = copySnapshot(rawSnapshot);
     const latestTick = snapshots.at(-1)?.snapshot.tick ?? -1;
     if (snapshot.tick <= latestTick) return;
+    const previousSnapshot = snapshots.at(-1)?.snapshot;
+    if (previousSnapshot) emitSnapshotAudioEvents(previousSnapshot, snapshot);
     const now = performance.now();
     lastSnapshotAppliedAt = now;
     lastSnapshotServerAgeMs = snapshot.serverTimeMs === undefined ? 0 : Math.max(0, ((Date.now() >>> 0) - (Number(snapshot.serverTimeMs) >>> 0)) >>> 0);
@@ -191,6 +281,7 @@ export function createNetworkGame({
         y: prediction.y + correction.y,
       };
       authoritative = cloneShip(localServerShip);
+      localShotsFired = Math.max(localShotsFired, Number(localServerShip.shotsFired) || 0);
       const pending = history.filter((input) => input.seq > ack);
       history.splice(0, history.length, ...pending);
       if (getNetworkSettings().prediction) {
@@ -232,6 +323,42 @@ export function createNetworkGame({
     };
   }
 
+  function steerLocalBullet(bullet) {
+    if (!bullet.homing) return;
+    const snapshot = snapshots.at(-1)?.snapshot;
+    if (!snapshot) return;
+    const targets = [
+      ...(snapshot.players || []).filter((ship) => ship.id !== playerId && ship.hp > 0),
+      ...(snapshot.enemies || []).filter((enemy) => enemy.hp > 0),
+      ...(snapshot.asteroids || []),
+    ];
+    let target = null;
+    let best = Infinity;
+    for (const candidate of targets) {
+      let dx = candidate.x - bullet.x;
+      let dy = candidate.y - bullet.y;
+      if (dx > room.width / 2) dx -= room.width;
+      if (dx < -room.width / 2) dx += room.width;
+      if (dy > room.height / 2) dy -= room.height;
+      if (dy < -room.height / 2) dy += room.height;
+      const distance = dx * dx + dy * dy;
+      if (distance < best) {
+        best = distance;
+        target = { dx, dy };
+      }
+    }
+    if (!target) return;
+    const desired = Math.atan2(target.dy, target.dx);
+    let difference = desired - bullet.angle;
+    while (difference > Math.PI) difference -= Math.PI * 2;
+    while (difference < -Math.PI) difference += Math.PI * 2;
+    const maxTurn = 4.2 * SIM_DT;
+    bullet.angle += clamp(difference, -maxTurn, maxTurn);
+    const speed = Math.max(1, Math.hypot(bullet.vx, bullet.vy));
+    bullet.vx = Math.cos(bullet.angle) * speed;
+    bullet.vy = Math.sin(bullet.angle) * speed;
+  }
+
   function stepPrediction() {
     const rawInput = currentInput();
     const input = protocol === 'binary'
@@ -259,16 +386,21 @@ export function createNetworkGame({
         prediction.y = ((prediction.y + (Math.random() - 0.5) * 4) % room.height + room.height) % room.height;
       }
       if (result.fired) {
-        localBullets.push(createBulletFromShip(prediction, localBulletId, playerId));
+        localShotsFired = Number(prediction.shotsFired) || (localShotsFired + 1);
+        localBullets.push(createBulletFromShip(prediction, localBulletId, playerId, localShotsFired % 5 === 0));
         localBulletId -= 1;
+        emitGameEvent('fired', { ownerId: playerId, predicted: true });
       }
     } else if (input.fire && localFireCooldown <= 0) {
-      localBullets.push(createBulletFromShip(authoritative, localBulletId, playerId));
+      localShotsFired += 1;
+      localBullets.push(createBulletFromShip({ ...authoritative, shotsFired: localShotsFired }, localBulletId, playerId, localShotsFired % 5 === 0));
       localBulletId -= 1;
       localFireCooldown = 0.22;
+      emitGameEvent('fired', { ownerId: playerId, predicted: false });
     }
     localFireCooldown = Math.max(0, localFireCooldown - SIM_DT);
     for (const bullet of localBullets) {
+      steerLocalBullet(bullet);
       bullet.x = ((bullet.x + bullet.vx * SIM_DT) % room.width + room.width) % room.width;
       bullet.y = ((bullet.y + bullet.vy * SIM_DT) % room.height + room.height) % room.height;
       bullet.ttl -= SIM_DT;
@@ -336,10 +468,14 @@ export function createNetworkGame({
     const predictionEnabled = Boolean(getNetworkSettings().prediction);
     const timed = findInterpolatedSnapshot(now - INTERPOLATION_DELAY_MS);
     const remotePlayers = interpolateList(timed.snapshot.players, timed.next.players, timed.alpha, (item) => item.id)
-      .filter((ship) => ship.id !== playerId);
-    const serverBullets = interpolateList(timed.snapshot.bullets, timed.next.bullets, timed.alpha, (item) => item.id)
+      .filter((ship) => ship.id !== playerId && ship.hp > 0);
+    const enemies = interpolateList(timed.snapshot.enemies, timed.next.enemies, timed.alpha, (item) => item.id)
+      .filter((enemy) => enemy.hp > 0);
+    const serverBullets = interpolateList(timed.snapshot.bullets, timed.next.bullets, timed.alpha, (item) => `${item.ownerId}:${item.id}`)
       .filter((bullet) => bullet.ownerId !== playerId);
     const asteroids = interpolateList(timed.snapshot.asteroids, timed.next.asteroids, timed.alpha, (item) => item.id);
+    const pickups = interpolateList(timed.snapshot.pickups, timed.next.pickups, timed.alpha, (item) => item.id)
+      .filter((pickup) => pickup.active);
     // Prediction-off is intentionally a baseline: render the latest server-owned state,
     // not the remote-entity interpolation buffer. This makes the input delay visible
     // without adding the separate 100 ms interpolation delay used for other players.
@@ -350,9 +486,12 @@ export function createNetworkGame({
       y: ((localState.y + (predictionEnabled ? correction.y : 0)) % room.height + room.height) % room.height,
     };
     const entities = [];
-    if (localDrawShip) entities.push(entityForRenderer('ship', localDrawShip, localDrawShip.x * sx, localDrawShip.y * sy, scale, true));
+    if (localDrawShip && localDrawShip.hp > 0) entities.push(entityForRenderer('ship', localDrawShip, localDrawShip.x * sx, localDrawShip.y * sy, scale, true));
     for (const ship of remotePlayers) {
       entities.push(entityForRenderer('ship', ship, ship.x * sx, ship.y * sy, scale, false));
+    }
+    for (const enemy of enemies) {
+      entities.push(entityForRenderer('enemy', enemy, enemy.x * sx, enemy.y * sy, scale, false));
     }
     for (const bullet of serverBullets) {
       entities.push(entityForRenderer('bullet', bullet, bullet.x * sx, bullet.y * sy, scale, false));
@@ -362,6 +501,16 @@ export function createNetworkGame({
     }
     for (const asteroid of asteroids) {
       entities.push(entityForRenderer('asteroid', asteroid, asteroid.x * sx, asteroid.y * sy, scale, false));
+    }
+    for (const pickup of pickups) {
+      entities.push(entityForRenderer('pickup', pickup, pickup.x * sx, pickup.y * sy, scale, false));
+    }
+    for (const effect of effects) {
+      const particle = entityForRenderer('particle', effect, effect.x * sx, effect.y * sy, scale, false);
+      particle.alpha = clamp(effect.life / effect.maxLife, 0, 1);
+      particle.size = effect.size * scale;
+      particle.color = effect.color;
+      entities.push(particle);
     }
     renderer.render(entities, 0);
     if (predictionEnabled) {
@@ -386,7 +535,9 @@ export function createNetworkGame({
       hp: authoritative?.hp ?? 0,
       score: authoritative?.score ?? 0,
       players: snapshots.at(-1)?.snapshot.players.length || 0,
-      entities: (snapshots.at(-1)?.snapshot.players.length || 0) + (snapshots.at(-1)?.snapshot.bullets.length || 0) + (snapshots.at(-1)?.snapshot.asteroids.length || 0),
+      enemies: snapshots.at(-1)?.snapshot.enemies.length || 0,
+      pickups: (snapshots.at(-1)?.snapshot.pickups || []).filter((pickup) => pickup.active).length,
+      entities: (snapshots.at(-1)?.snapshot.players.length || 0) + (snapshots.at(-1)?.snapshot.enemies.length || 0) + (snapshots.at(-1)?.snapshot.bullets.length || 0) + (snapshots.at(-1)?.snapshot.asteroids.length || 0) + (snapshots.at(-1)?.snapshot.pickups.length || 0),
       stepsPerSecond,
       framesPerSecond,
       frameTimeMs,
@@ -404,6 +555,7 @@ export function createNetworkGame({
     let stepsThisFrame = 0;
     while (accumulator >= SIM_DT && stepsThisFrame < 5) {
       stepPrediction();
+      updateEffects(SIM_DT);
       accumulator -= SIM_DT;
       renderedSteps += 1;
       stepsThisFrame += 1;

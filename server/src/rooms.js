@@ -22,7 +22,66 @@ function makeRoomSummary(room) {
     width: room.width,
     height: room.height,
     asteroids: room.asteroids,
-    enemies: 0,
+    enemies: room.enemies,
+  };
+}
+
+// JSON mode intentionally sends the same public simulation fields as binary mode.
+// Internal timers (respawnTick/collisionCooldown) remain server-owned.
+function shipWireState(ship) {
+  return {
+    id: ship.id,
+    x: ship.x,
+    y: ship.y,
+    vx: ship.vx,
+    vy: ship.vy,
+    angle: ship.angle,
+    radius: ship.radius,
+    hp: ship.hp,
+    maxHp: ship.maxHp,
+    score: ship.score,
+    fireCooldown: ship.fireCooldown,
+    shotsFired: ship.shotsFired,
+  };
+}
+
+function bulletWireState(bullet) {
+  return {
+    id: bullet.id,
+    ownerId: bullet.ownerId,
+    x: bullet.x,
+    y: bullet.y,
+    vx: bullet.vx,
+    vy: bullet.vy,
+    angle: bullet.angle,
+    ttl: bullet.ttl,
+    radius: bullet.radius || 4,
+    homing: Boolean(bullet.homing),
+  };
+}
+
+function asteroidWireState(asteroid) {
+  return {
+    id: asteroid.id,
+    x: asteroid.x,
+    y: asteroid.y,
+    vx: asteroid.vx,
+    vy: asteroid.vy,
+    angle: asteroid.angle,
+    angularVelocity: asteroid.angularVelocity,
+    radius: asteroid.radius,
+    hp: asteroid.hp,
+    maxHp: asteroid.maxHp,
+  };
+}
+
+function pickupWireState(pickup) {
+  return {
+    id: pickup.id,
+    x: pickup.x,
+    y: pickup.y,
+    radius: pickup.radius,
+    active: Boolean(pickup.active),
   };
 }
 
@@ -41,7 +100,8 @@ export class Room extends EventEmitter {
     this.width = config.width;
     this.height = config.height;
     this.asteroids = config.asteroids;
-    this.enemies = 0;
+    this.enemies = Math.max(0, Number(config.enemies ?? 2));
+    this.enemyHp = Math.max(20, Math.min(255, Number(config.enemyHp ?? 60)));
     this.log = config.log;
     this.persistent = Boolean(config.persistent);
     this.players = new Map();
@@ -50,6 +110,8 @@ export class Room extends EventEmitter {
       height: this.height,
       seed: config.seed ?? (randomBytes(4).readUInt32LE(0) || 1),
       asteroidCount: this.asteroids,
+      enemyCount: this.enemies,
+      enemyHp: this.enemyHp,
     });
 
     this.on('error', (error) => console.error(`[room:${this.id}]`, error));
@@ -128,9 +190,11 @@ export class Room extends EventEmitter {
       ackSeq: player?.appliedSeq ?? 0,
       width: this.simulation.width,
       height: this.simulation.height,
-      players: this.simulation.ships.map((ship) => ({ ...ship })),
-      bullets: this.simulation.bullets.map((bullet) => ({ ...bullet })),
-      asteroids: this.simulation.asteroids.map((asteroid) => ({ ...asteroid })),
+      players: this.simulation.ships.map(shipWireState),
+      bullets: this.simulation.bullets.map(bulletWireState),
+      asteroids: this.simulation.asteroids.map(asteroidWireState),
+      pickups: this.simulation.pickups.map(pickupWireState),
+      enemies: this.simulation.enemies.map(shipWireState),
     };
   }
 
@@ -233,12 +297,15 @@ export class RoomManager extends EventEmitter {
       width: Number(config.width ?? 960),
       height: Number(config.height ?? 540),
       asteroids: Number(config.asteroids ?? 8),
-      enemies: 0,
+      enemies: Number(config.enemies ?? 2),
+      enemyHp: Number(config.enemyHp ?? 60),
     };
     if (!Number.isInteger(values.maxPlayers) || values.maxPlayers < 1 || values.maxPlayers > 32
       || !Number.isInteger(values.width) || values.width < 320 || values.width > 65535
       || !Number.isInteger(values.height) || values.height < 240 || values.height > 65535
-      || !Number.isInteger(values.asteroids) || values.asteroids < 0 || values.asteroids > 100) {
+      || !Number.isInteger(values.asteroids) || values.asteroids < 0 || values.asteroids > 100
+      || !Number.isInteger(values.enemies) || values.enemies < 0 || values.enemies > 16
+      || !Number.isInteger(values.enemyHp) || values.enemyHp < 20 || values.enemyHp > 255) {
       throw new Error('Room numeric configuration is out of range');
     }
     const log = await this.#loggerFactory(id);
