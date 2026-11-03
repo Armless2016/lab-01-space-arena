@@ -8,6 +8,7 @@ import { decodeInputBinary } from '@space-arena/shared/protocol';
 import { getErrorMessage, getProtocolCloseCode, parseClientMessage, sendJson } from './protocol.ts';
 import type { Room, RoomManager, RoomPlayer } from './rooms.ts';
 import type { ServerConfig } from './config.ts';
+import { createMessageRateLimiter } from './rate-limit.ts';
 
 const JOIN_TIMEOUT_MS = 5000;
 const PING_INTERVAL_MS = 15000;
@@ -57,16 +58,6 @@ export function attachWebSocketServer(httpServer: import('node:http').Server, op
 
   function contextOf(ws: WebSocket): SocketContext | undefined { return contexts.get(ws); }
 
-  function installRateLimit(): () => boolean {
-    let windowStart = Date.now();
-    let count = 0;
-    return () => {
-      const now = Date.now();
-      if (now - windowStart >= 1000) { windowStart = now; count = 0; }
-      count += 1;
-      return count <= config.maxMessagesPerSecond;
-    };
-  }
 
   function sendToClient(ws: WebSocket, payload: unknown, sendOptions: SendOptions = {}): boolean {
     if (ws.readyState !== WebSocket.OPEN) return false;
@@ -115,7 +106,7 @@ export function attachWebSocketServer(httpServer: import('node:http').Server, op
     context.joinTimer = setTimeout(() => {
       if (!context.room && ws.readyState === WebSocket.OPEN) ws.close(1008, 'join required within 5 seconds');
     }, JOIN_TIMEOUT_MS);
-    allowMessage.set(ws, installRateLimit());
+    allowMessage.set(ws, createMessageRateLimiter(config.maxMessagesPerSecond));
 
     ws.on('pong', () => {
       context.isAlive = true;

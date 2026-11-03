@@ -1,4 +1,5 @@
-import { entityId, stepNumber, type AsteroidState, type BulletState, type ControlInput, type EntityId, type PickupState, type ShipState, type SimulationState, type StepNumber } from './types.ts';
+import { entityId, stepNumber, type AsteroidState, type BulletState, type ControlInput, type EntityId, type ShipState, type SimulationState } from './types.ts';
+import { squaredToroidalDistance } from './collision.ts';
 
 /**
  * Deterministic simulation shared by browser and Node.js.
@@ -61,9 +62,7 @@ function wrappedDelta(a: number, b: number, size: number): number {
 }
 
 function squaredDistance(a: { x: number; y: number }, b: { x: number; y: number }, simulation: SimulationState): number {
-  const dx = wrappedDelta(a.x, b.x, simulation.width);
-  const dy = wrappedDelta(a.y, b.y, simulation.height);
-  return dx * dx + dy * dy;
+  return squaredToroidalDistance(a, b, simulation.width, simulation.height);
 }
 
 function nextBulletId(simulation: SimulationState): EntityId {
@@ -132,6 +131,7 @@ export function createSimulation({
     ships: [],
     enemies: [],
     bullets: [],
+    bulletPool: [],
     asteroids: [],
     pickups: [],
     nextBulletId: 1,
@@ -150,7 +150,7 @@ export function createSimulation({
       y: 40 + nextRandom(simulation) * (simulation.height - 80),
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
-      angle: nextRandom(simulation) * Math.PI * 2,
+      angle: normalizeAngle(nextRandom(simulation) * Math.PI * 2),
       angularVelocity: (nextRandom(simulation) - 0.5) * 0.7,
       radius,
       hp: 40,
@@ -227,7 +227,10 @@ export function addPlayer(simulation: SimulationState, id: number | EntityId): S
 export function removePlayer(simulation: SimulationState, id: number | EntityId): void {
   const safeId = entityId(Number(id));
   simulation.ships = simulation.ships.filter((ship) => ship.id !== safeId);
-  simulation.bullets = simulation.bullets.filter((bullet) => bullet.ownerId !== safeId);
+  for (let index = simulation.bullets.length - 1; index >= 0; index -= 1) {
+    const bullet = simulation.bullets[index];
+    if (bullet?.ownerId === safeId) removeBulletAt(simulation, index);
+  }
 }
 
 /** Pure fixed-step integration: returns a new state and whether this step fired. */
@@ -263,11 +266,17 @@ export function integrateShip(ship: ShipState, input: ControlInput = {}, dt = SI
   };
 }
 
-export function createBulletFromShip(ship: ShipState, id: number | EntityId, ownerId: number | EntityId = ship.id, homing = false): BulletState {
+export function createBulletFromShip(
+  ship: ShipState,
+  id: number | EntityId,
+  ownerId: number | EntityId = ship.id,
+  homing = false,
+  reuse?: BulletState,
+): BulletState {
   const noseOffset = ship.radius + 7;
   const dx = Math.cos(ship.angle);
   const dy = Math.sin(ship.angle);
-  return {
+  const values = {
     id: entityId(Number(id)),
     ownerId: entityId(Number(ownerId)),
     x: ship.x + dx * noseOffset,
@@ -279,6 +288,28 @@ export function createBulletFromShip(ship: ShipState, id: number | EntityId, own
     radius: 4,
     homing: Boolean(homing),
   };
+  if (reuse) {
+    Object.assign(reuse, values);
+    return reuse;
+  }
+  return values;
+}
+
+const MAX_POOLED_BULLETS = 512;
+
+function spawnPooledBullet(simulation: SimulationState, ship: ShipState, ownerId: number | EntityId, homing: boolean): void {
+  const reuse = simulation.bulletPool.pop();
+  const bullet = createBulletFromShip(ship, nextBulletId(simulation), ownerId, homing, reuse);
+  simulation.bullets.push(bullet);
+}
+
+function recycleBullet(simulation: SimulationState, bullet: BulletState): void {
+  if (simulation.bulletPool.length < MAX_POOLED_BULLETS) simulation.bulletPool.push(bullet);
+}
+
+function removeBulletAt(simulation: SimulationState, index: number): void {
+  const [removed] = simulation.bullets.splice(index, 1);
+  if (removed) recycleBullet(simulation, removed);
 }
 
 function steerHomingBullet(bullet: BulletState, simulation: SimulationState, dt: number): void {
@@ -428,13 +459,13 @@ function fireEnemyBullets(simulation: SimulationState, dt: number): void {
     const result = integrateShip(enemy, controls, dt, bounds);
     Object.assign(enemy, result.state);
     enemy.maxHp = enemy.maxHp || simulation.enemyHp;
-    if (result.fired) simulation.bullets.push(createBulletFromShip(enemy, nextBulletId(simulation), enemy.id, enemy.shotsFired % 5 === 0));
+    if (result.fired) spawnPooledBullet(simulation, enemy, enemy.id, enemy.shotsFired % 5 === 0);
   }
 }
 
 export function stepSimulation(simulation: SimulationState, inputsByPlayerId: ReadonlyMap<EntityId, ControlInput> = new Map<EntityId, ControlInput>(), dt = SIM_DT): SimulationState {
   const bounds = { width: simulation.width, height: simulation.height };
-  const nextShips = [];
+  const nextShips: typeof simulation.ships = [];
   for (const ship of simulation.ships) {
     if (ship.hp <= 0) {
       if (simulation.tick >= ship.respawnTick) respawnShip(ship, simulation);
@@ -445,8 +476,9 @@ export function stepSimulation(simulation: SimulationState, inputsByPlayerId: Re
     }
     const input = inputsByPlayerId.get(ship.id) ?? {};
     const result = integrateShip(ship, input, dt, bounds);
-    nextShips.push(result.state);
-    if (result.fired) simulation.bullets.push(createBulletFromShip(result.state, nextBulletId(simulation), ship.id, result.state.shotsFired % 5 === 0));
+    Object.assign(ship, result.state);
+    nextShips.push(ship);
+    if (result.fired) spawnPooledBullet(simulation, ship, ship.id, ship.shotsFired % 5 === 0);
   }
   simulation.ships = nextShips;
 
@@ -486,7 +518,7 @@ export function stepSimulation(simulation: SimulationState, inputsByPlayerId: Re
     bullet.y = wrap(bullet.y + bullet.vy * dt, simulation.height);
     bullet.ttl -= dt;
     if (bullet.ttl <= 0) {
-      simulation.bullets.splice(index, 1);
+      removeBulletAt(simulation, index);
       continue;
     }
 
@@ -550,7 +582,7 @@ export function stepSimulation(simulation: SimulationState, inputsByPlayerId: Re
       }
     }
 
-    if (hit) simulation.bullets.splice(index, 1);
+    if (hit) removeBulletAt(simulation, index);
   }
 
   simulation.tick = stepNumber(simulation.tick + 1);

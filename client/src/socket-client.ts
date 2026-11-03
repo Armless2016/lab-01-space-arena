@@ -1,12 +1,6 @@
 import { decodeSnapshotBinary, encodeInputBinary } from '@space-arena/shared/protocol';
 import { ClientMessageSchema, ServerMessageSchema, type ParsedClientMessage, type ParsedServerMessage } from '@space-arena/shared/schemas';
 
-function viewToArrayBuffer(view: ArrayBufferView): ArrayBuffer {
-  const copy = new Uint8Array(view.byteLength);
-  copy.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
-  return copy.buffer;
-}
-
 export type SocketProtocol = 'json' | 'binary';
 export type IncomingMessage = ParsedServerMessage & { readonly __transportBytes?: number };
 export interface SocketStateDetail {
@@ -24,6 +18,19 @@ type OutgoingMessage = ParsedClientMessage;
 function frameSize(frame: WireFrame): number {
   return typeof frame === 'string' ? new TextEncoder().encode(frame).byteLength : frame.byteLength;
 }
+
+function isArrayBufferView(value: unknown): value is ArrayBufferView {
+  return ArrayBuffer.isView(value);
+}
+
+/** Copy views into a standalone ArrayBuffer; WebSocket payload views may use SharedArrayBuffer. */
+function toWireArrayBuffer(value: ArrayBuffer | ArrayBufferView): ArrayBuffer {
+  if (value instanceof ArrayBuffer) return value;
+  const copy = new Uint8Array(value.byteLength);
+  copy.set(new Uint8Array(value.buffer, value.byteOffset, value.byteLength));
+  return copy.buffer;
+}
+
 function errorText(error: unknown): string { return error instanceof Error ? error.message : String(error); }
 
 export class ReconnectingSocket extends EventTarget {
@@ -108,21 +115,15 @@ export class ReconnectingSocket extends EventTarget {
     });
     socket.addEventListener('message', (event: MessageEvent<unknown>) => {
       try {
-        const data: unknown = event.data;
-        let bytes: number;
+        const binaryFrame = event.data instanceof ArrayBuffer
+          ? event.data
+          : isArrayBufferView(event.data) ? toWireArrayBuffer(event.data) : null;
+        const bytes = binaryFrame !== null ? frameSize(binaryFrame) : frameSize(String(event.data));
         let message: ParsedServerMessage;
-        if (data instanceof ArrayBuffer) {
-          bytes = frameSize(data);
-          message = decodeSnapshotBinary(data);
-        } else if (ArrayBuffer.isView(data)) {
-          // Copy the view into a fresh ArrayBuffer so SharedArrayBuffer-backed views are safe too.
-          const buffer = viewToArrayBuffer(data);
-          bytes = frameSize(buffer);
-          message = decodeSnapshotBinary(buffer);
+        if (binaryFrame !== null) {
+          message = decodeSnapshotBinary(binaryFrame);
         } else {
-          const text = String(data);
-          bytes = frameSize(text);
-          const raw: unknown = JSON.parse(text);
+          const raw: unknown = JSON.parse(String(event.data));
           message = ServerMessageSchema.parse(raw);
         }
         const detail: IncomingMessage = { ...message, __transportBytes: bytes };

@@ -9,6 +9,7 @@ import { createLobbyView } from './lobby-view.ts';
 import { createNetworkGame } from './network-game.ts';
 import { runFailureGallery, runMicrotaskPuzzles, runPromiseCombinatorsDemo, measureAssetStrategies } from './diagnostics.ts';
 import { ReconnectingSocket, type IncomingMessage, type SocketStateDetail } from './socket-client.ts';
+import { runWorkerPerformanceExperiment, disposePerformanceWorker } from './worker-experiment.ts';
 
 function mustGet<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
@@ -64,6 +65,9 @@ const netStats = {
   queue: mustGet<HTMLElement>('#netQueue'), correction: mustGet<HTMLElement>('#netCorrection'), dropped: mustGet<HTMLElement>('#netDropped'),
   protocol: mustGet<HTMLElement>('#netProtocol'),
 };
+const performanceSummary = mustGet<HTMLElement>('#performanceSummary');
+const workerBenchmarkButton = mustGet<HTMLButtonElement>('#workerBenchmarkBtn');
+const workerBenchmarkOutput = mustGet<HTMLElement>('#workerBenchmarkOutput');
 const hud = createHud({
   root: mustGet<HTMLElement>('#hud'), playerName: mustGet<HTMLElement>('#playerName'), roomName: mustGet<HTMLElement>('#roomName'),
   hp: mustGet<HTMLElement>('#hp'), score: mustGet<HTMLElement>('#score'), entities: mustGet<HTMLElement>('#entities'),
@@ -183,6 +187,7 @@ listenDetail<IncomingMessage>(socketClient, 'message', (message) => {
         netStats.correction.textContent = `${stats.correctionPx.toFixed(1)} px`;
         netStats.dropped.textContent = String(stats.droppedPackets);
         netStats.protocol.textContent = stats.protocol;
+        performanceSummary.textContent = `Frame p50/p95/p99: ${stats.frameP50Ms.toFixed(2)}/${stats.frameP95Ms.toFixed(2)}/${stats.frameP99Ms.toFixed(2)} ms · GC: ${stats.gcCount} pauses / ${stats.gcPauseMs.toFixed(2)} ms · pooled bullet/particle reuses: ${stats.bulletPoolReuses}/${stats.particlePoolReuses} · active: ${stats.activeLocalBullets}/${stats.activeParticles}`;
       },
       onLeave: () => leaveRoomButton.click(),
     });
@@ -223,6 +228,24 @@ for (const button of diagnosticsPanel.querySelectorAll<HTMLButtonElement>('[data
   });
 }
 
+
+workerBenchmarkButton.addEventListener('click', async () => {
+  workerBenchmarkButton.disabled = true;
+  workerBenchmarkOutput.textContent = 'Comparing percentile analysis on the main thread and in a Worker...';
+  try {
+    const result = await runWorkerPerformanceExperiment();
+    workerBenchmarkOutput.textContent = JSON.stringify({
+      ...result,
+      mainThreadMs: Number(result.mainThreadMs.toFixed(3)),
+      workerRoundTripMs: Number(result.workerRoundTripMs.toFixed(3)),
+    }, null, 2);
+  } catch (error: unknown) {
+    workerBenchmarkOutput.textContent = formatError(error);
+  } finally {
+    workerBenchmarkButton.disabled = false;
+  }
+});
+
 timingButton.addEventListener('click', async () => {
   timingButton.disabled = true; diagnosticOutput.textContent = 'Measuring sequential await vs concurrent Promise.all...';
   try {
@@ -245,6 +268,6 @@ function updateNetworkControlLabels(): void {
 }
 for (const control of [latencyRange, jitterRange, lossRange]) control.addEventListener('input', updateNetworkControlLabels);
 updateNetworkControlLabels();
-window.addEventListener('beforeunload', () => { lobby.stop(); game?.stop(); socketClient.close(); loadController?.abort(new DOMException('Page closed', 'AbortError')); });
+window.addEventListener('beforeunload', () => { lobby.stop(); game?.stop(); socketClient.close(); disposePerformanceWorker(); loadController?.abort(new DOMException('Page closed', 'AbortError')); });
 hud.hide();
 loadingRenderer.draw({ progress: 0, label: 'Click “Enable audio & load game” to begin.' });

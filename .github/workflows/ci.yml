@@ -5,8 +5,9 @@ on:
   pull_request:
 
 jobs:
-  typecheck-and-test:
+  quality:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -16,7 +17,15 @@ jobs:
         run: npm install
       - name: TypeScript strict check
         run: npm run typecheck
-      - name: Shared simulation tests
+      - name: ESLint
+        run: npm run lint
+      - name: Unit and property tests with shared coverage threshold
+        run: npm run test:coverage
+      - name: Deterministic simulation smoke test
         run: npm run test:shared
       - name: Build browser client
         run: npm run build
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Two-client browser test
+        run: npm run test:e2e

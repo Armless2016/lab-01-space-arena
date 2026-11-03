@@ -1,6 +1,10 @@
 # Space Arena — JavaScript Semester Project
 
-Labs 01–06 build one browser multiplayer game step by step. The client is in `client/`, the Node.js server in `server/`, and **the deterministic simulation and wire codecs shared by both runtimes are in `shared/`**.
+[![CI](https://github.com/USERNAME/REPOSITORY/actions/workflows/ci.yml/badge.svg)](https://github.com/USERNAME/REPOSITORY/actions/workflows/ci.yml)
+
+<!-- Replace USERNAME/REPOSITORY with the owner and repository name after publishing. -->
+
+Labs 01–07 build one browser multiplayer game step by step. The client is in `client/`, the Node.js server in `server/`, and **the deterministic simulation and wire codecs shared by both runtimes are in `shared/`**.
 
 ## Lab 05 — Server-authoritative multiplayer, prediction and binary protocol
 
@@ -205,7 +209,7 @@ Lab 06 keeps the existing gameplay and converts the shared simulation/protocol p
 ### What is typed
 
 - `shared/types.ts` defines the shared contracts for controls, ships, bullets, asteroids, pickups and snapshots. Vector-like inputs use `readonly` coordinates, so callers cannot accidentally mutate a value through the interface.
-- `EntityId`, `StepNumber` and `InputSeq` are branded numbers. They are all numbers at runtime, but TypeScript rejects accidentally passing an input sequence where an entity ID is required. The three brand constructors are the only branded casts. There are four type assertions in the active client/shared/server source total: those three constructors plus one documented `CustomEvent` detail boundary.
+- `EntityId`, `StepNumber` and `InputSeq` are branded numbers. They are all numbers at runtime, but TypeScript rejects accidentally passing an input sequence where an entity ID is required. The three brand constructors share one documented generic assertion helper. There are three type assertions in active client/shared/server runtime source: the brand helper, the `CustomEvent<T>` event-bus boundary and the Worker-global boundary; each has a short nearby comment.
 - Messages form discriminated unions using the `type` field (`input`, `snapshot`, `joined`, `chat`, and so on); simulation entities/snapshots have distinct shapes and the shared entity-kind union. Switch statements that need to handle all variants use `assertNever`/a `never` assignment so adding a new variant triggers a compile-time error until it is handled.
 - `shared/schemas.ts` uses Zod schemas as the source of runtime validation and inferred types. The WebSocket entry point accepts untrusted data as `unknown`, checks JSON before dispatch, and closes/logs malformed messages rather than assuming that TypeScript types validate external data.
 - `shared/protocol.ts` checks the binary version, exact packet length and field ranges before reading a frame. TypeScript does not validate a byte stream at runtime; the decoder and Zod schemas do that explicitly.
@@ -259,3 +263,117 @@ git push origin lab-06
 ```
 
 The submission is the URL of the same public repository with tags `lab-01` through `lab-06`. The old tags are historical checkpoints and should not be moved.
+
+
+## Lab 07 — V8, memory, profiling and automated tests
+
+Lab 07 keeps the Lab 01–06 gameplay and network protocol. It adds automated correctness tests, browser-to-browser end-to-end coverage, performance telemetry, object reuse and load-test tools. Do not remove the earlier lab sections or move the historical Git tags.
+
+### Test layers
+
+- **Vitest** runs tests for `shared/`, `client/` and `server/`. The suite contains more than 60 named test cases. `shared/tests/protocol.property.test.ts` has six `fast-check` properties for input round-trips (including int8 quantization), snapshot angle round-trips (including Int16 quantization), exact snapshot frame length, malformed/truncated buffers, arena-bound invariants and Zod message validation. The configured shared-code line and statement coverage gates are at least 85%.
+- **Determinism** runs the exact same `shared/simulation.ts` code in both Node and the browser bundle. Equal seeds and equal input sequences must result in equal state; the smoke test and unit tests check this invariant. No `Math.random()` or wall-clock time is used by the shared simulation.
+- **Playwright** launches two independent Chromium browser processes, joins both to one room, verifies that the second browser receives movement for the first player's ship, and checks that room chat arrives.
+- **GitHub Actions** runs typecheck, lint, Vitest with coverage thresholds, shared determinism smoke test, client build and the two-browser Playwright scenario for every push and pull request. The badge at the top of this README is the workflow status; replace `USERNAME/REPOSITORY` with the actual GitHub path after publishing. CI also installs Chromium before the Playwright job, so the same two-browser check runs on pushes and pull requests.
+
+Commands from the repository root:
+
+```bash
+npm install
+npm run typecheck
+npm run lint
+npm test
+npm run test:coverage
+npm run test:shared
+npm run build
+npm run test:e2e
+npm run test:all
+```
+
+`npm run test:all` executes the full local quality sequence. `npm run test:coverage` writes an HTML report to `coverage/`; the CI gate requires at least 85% shared-code lines and statements. The six property tests use hundreds of generated inputs in addition to their normal examples.
+
+### V8, hidden classes and inline caches
+
+V8 first parses JavaScript and produces bytecode for its interpreter. Frequently executed functions can be optimized by the JIT compiler. Optimizations rely on assumptions about types and object shapes; when those assumptions stop holding, V8 may deoptimize a function and return to a less specialized execution path. V8 uses hidden classes (also called Maps) to describe object layouts, and inline caches remember property-access information for previously seen shapes.
+
+For this reason, the hot game objects keep a consistent property layout: ships and bullets are created with the same fields in the same order, and pooling resets/reuses those objects rather than repeatedly changing their shape. Run the small diagnostic with:
+
+```bash
+npm run v8:trace
+```
+
+The command uses Node/V8 `--trace-opt` and `--trace-deopt` output. Its timings are illustrative only; use Chrome DevTools on the actual browser game for frame profiling.
+
+### Memory and object reuse
+
+- Server simulation bullets are recycled through `SimulationState.bulletPool` (bounded at 512 entries). Expired and hit bullets return to the pool; firing reinitializes an existing object when possible.
+- The client reuses predicted local bullets and visual explosion particles. The performance HUD reports pool reuse counts and active counts.
+- The frame-time monitor stores samples in a fixed-size `Float64Array` ring buffer; it does not shift or allocate a new vector/record on each animation frame. Percentiles are calculated only when the summary is requested. The game loop itself does not create `Vector2` objects per frame; the simulation's hot integration path uses numeric coordinates.
+- The browser performance panel displays frame p50/p95/p99 and GC event totals when the browser exposes `PerformanceObserver` GC entries. If GC entries are unsupported, use the GC markers in Chrome DevTools Performance recordings; a zero counter alone does not prove that no GC occurred.
+
+### Recording a 30-second eight-bot profile
+
+1. Start the app from the repository root with `npm run dev`.
+2. In a second terminal set the bot run to eight clients and 30 seconds, then start it:
+
+   **PowerShell**
+   ```powershell
+   $env:BOT_COUNT = '8'
+   $env:DURATION_MS = '30000'
+   $env:ROOM_ID = 'lab7-eight-bot-recording'
+   npm run bots:record
+   ```
+
+3. The script creates a temporary room and connects eight bots. Open the browser lobby during the 30-second run and join `lab7-eight-bot-recording` with a human player.
+4. Open Chrome DevTools → **Performance**, start recording, leave it running for the same 30-second window, then stop. Record frame p50/p95/p99 from the in-game performance panel and GC pauses from the DevTools timeline.
+5. In the Performance panel inspect **Bottom-up** / **Heaviest stack** and the allocation view. Record which function or entity creates the most short-lived objects. Save screenshots of the flame chart before and after optimization to `docs/flame-before.png` and `docs/flame-after.png`, and add them below. Do not write estimated numbers as measured results.
+
+**Before/after evidence — replace these lines with your real Chrome DevTools captures:**
+
+- Before optimization: `docs/flame-before.png`
+- After optimization: `docs/flame-after.png`
+
+The target is p99 frame time below **16.7 ms** and no long GC pause during the recording. These are targets, not hard-coded results: the actual measurements depend on the computer, browser, display refresh rate and bot load. The current code pools bullets/particles and uses a fixed-size frame sample buffer; compare the real DevTools profiles before claiming that the target was reached.
+
+### Web Worker experiment
+
+After joining a room, open the network/performance panel and press **Compare Main Thread vs Web Worker**. The experiment warms up a module Worker, processes a representative 1,800-sample frame-time batch on the main thread and in the Worker, and compares elapsed time including message/transfer overhead. A Worker is kept only if its round-trip is faster; otherwise it is terminated and the computation remains on the main thread. When retained, it also processes the large frame-time sample batches used by the live HUD (the monitor copies its ring buffer only once per second, not per frame). The decision is machine- and browser-dependent, so record the displayed measurements and conclusion in the report.
+
+### Server load test: 8, 32, 64 and 128 clients
+
+Keep the app/server running in one terminal, then run in another:
+
+```bash
+npm run loadtest
+```
+
+By default the script connects 8, 32, 64 and 128 WebSocket bots one load at a time. Every bot sends the same `{ seq, throttle, turn, fire }` input shape as a human client; no bot sends coordinates. The report prints room step p95/p99, the most recent maximum step time and the number of steps longer than **33.33 ms**. To use a shorter/longer measurement, set `DURATION_MS`; to change the client counts, set `CLIENT_COUNTS`.
+
+The current collision code retains the straightforward all-pairs checks as the baseline. Only replace them with a spatial hash if the measured room step p99 or over-budget count shows that collision work is the bottleneck. If a run crosses 33.33 ms, profile the collision loops first, add a deterministic spatial broadphase, then rerun exactly the same load test and document before/after p95/p99. No spatial-hash speedup is claimed without that measurement.
+
+### Required Lab 07 evidence to fill in after running locally
+
+| Measurement | Result from your machine |
+|---|---:|
+| Vitest named test cases | 149+ (including table-driven cases) |
+| Shared line coverage | TODO — copy from `npm run test:coverage` |
+| Frame p50 / p95 / p99 (8 bots, 30 s) | TODO — copy from browser HUD / DevTools |
+| GC pause count / total pause | TODO — Chrome DevTools Performance |
+| Main object-allocation source | TODO — DevTools Bottom-up / allocation profile |
+| Worker main-thread / round-trip time | TODO — Worker experiment output |
+| Server step p99 at 8 / 32 / 64 / 128 clients | TODO — `npm run loadtest` |
+| First client count above 33.33 ms, if any | TODO — load-test output |
+
+## Submission — Lab 07
+
+Keep this work in the same public repository used for Labs 01–06. Before committing, confirm `npm run typecheck`, `npm run lint`, `npm run test:coverage`, `npm run test:shared`, `npm run build` and `npm run test:e2e` pass. Add the real flame-chart screenshots and local measurements to README. Then create the new tag:
+
+```bash
+git add .
+git commit -m "lab-07: tests profiling and memory optimizations"
+git push origin main
+git tag lab-07
+git push origin lab-07
+```
+
+The submission is the URL of the same public GitHub repository with historical tags `lab-01` through `lab-07`. Do not delete or move the earlier lab tags.

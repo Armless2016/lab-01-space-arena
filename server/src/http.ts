@@ -31,7 +31,7 @@ function rejectTraversal(urlPath: string): boolean {
   return decoded.split('/').some((segment) => segment === '..') || decoded.includes('\\..');
 }
 
-async function serveStatic(req: IncomingMessage, res: ServerResponse, pathname: string, clientDistDir: string): Promise<void> {
+async function serveStatic(res: ServerResponse, pathname: string, clientDistDir: string): Promise<void> {
   if (rejectTraversal(pathname)) { json(res, 400, { error: 'path traversal rejected' }); return; }
   const relative = pathname === '/' ? 'index.html' : pathname.slice(1);
   const filePath = path.resolve(clientDistDir, relative);
@@ -60,6 +60,10 @@ export function createHttpHandler(options: { readonly config: ServerConfig; read
       const { pathname } = url;
       if (pathname === '/health' && req.method === 'GET') {
         json(res, 200, { ok: true, service: 'space-arena-server', time: new Date().toISOString() });
+        return;
+      }
+      if (pathname === '/api/metrics' && req.method === 'GET') {
+        json(res, 200, { rooms: rooms.performanceMetrics() });
         return;
       }
       if (pathname === '/api/rooms' && req.method === 'GET') { json(res, 200, rooms.list()); return; }
@@ -98,7 +102,7 @@ export function createHttpHandler(options: { readonly config: ServerConfig; read
         res.end('{ invalid json ');
         return;
       }
-      if (req.method === 'GET') { await serveStatic(req, res, pathname, config.clientDistDir); return; }
+      if (req.method === 'GET') { await serveStatic(res, pathname, config.clientDistDir); return; }
       json(res, 404, { error: 'not found' });
     } catch (error: unknown) {
       if (error instanceof RequestBodyError && error.code === 'BODY_TOO_LARGE') { json(res, 413, { error: error.message }); return; }

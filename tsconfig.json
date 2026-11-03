@@ -23,23 +23,23 @@
   },
   "include": [
     "shared/**/*.ts",
-    "server/src/**/*.ts",
     "client/src/main.ts",
-    "client/src/network-game.ts",
-    "client/src/socket-client.ts",
-    "client/src/asset-loader.ts",
-    "client/src/audio.ts",
-    "client/src/event-bus.ts",
-    "client/src/hud.ts",
-    "client/src/lobby.ts",
-    "client/src/lobby-view.ts",
-    "client/src/render.ts",
-    "client/src/diagnostics.ts",
-    "client/src/microtask-puzzles.ts",
-    "client/vite.config.ts"
+    "client/src/loop.ts",
+    "client/src/performance-monitor.ts",
+    "client/src/worker-experiment.ts",
+    "client/src/workers/**/*.ts",
+    "client/tests/**/*.ts",
+    "client/vite.config.ts",
+    "server/src/**/*.ts",
+    "server/tests/**/*.ts",
+    "scripts/**/*.ts",
+    "e2e/**/*.ts",
+    "playwright.config.ts",
+    "vitest.config.ts"
   ],
   "exclude": [
     "**/dist/**",
-    "**/node_modules/**"
+    "**/node_modules/**",
+    "server/bench/**"
   ]
 }

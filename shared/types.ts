@@ -1,25 +1,17 @@
-/** Compile-time brands prevent mixing unrelated numeric identifiers. */
-declare const entityIdBrand: unique symbol;
-declare const stepNumberBrand: unique symbol;
-declare const inputSeqBrand: unique symbol;
-
+/** Compile-time string brands prevent mixing unrelated numeric identifiers. */
 export type Brand<Value extends number, Name extends string> = Value & { readonly __brand: Name };
 export type EntityId = Brand<number, 'EntityId'>;
 export type StepNumber = Brand<number, 'StepNumber'>;
 export type InputSeq = Brand<number, 'InputSeq'>;
 
-// These constructors are the only intentional brand assertions in the codebase.
-export function entityId(value: number): EntityId {
-  return value as EntityId; // A validated integer is represented as an EntityId at compile time.
+// One generic constructor contains the deliberate assertion for all numeric brands.
+function brandNumber<Name extends string>(value: number): Brand<number, Name> {
+  return value as Brand<number, Name>; // The brand exists only at compile time; runtime validation happens at the boundary.
 }
 
-export function stepNumber(value: number): StepNumber {
-  return value as StepNumber; // The simulation increments ticks only by whole steps.
-}
-
-export function inputSeq(value: number): InputSeq {
-  return value as InputSeq; // Range validation occurs at the protocol boundary.
-}
+export function entityId(value: number): EntityId { return brandNumber<'EntityId'>(value); }
+export function stepNumber(value: number): StepNumber { return brandNumber<'StepNumber'>(value); }
+export function inputSeq(value: number): InputSeq { return brandNumber<'InputSeq'>(value); }
 
 export interface VectorLike {
   readonly x: number;
@@ -95,6 +87,8 @@ export interface SimulationState {
   ships: ShipState[];
   enemies: ShipState[];
   bullets: BulletState[];
+  /** Reusable bullet instances to reduce short-lived allocations on the server. */
+  bulletPool: BulletState[];
   asteroids: AsteroidState[];
   pickups: PickupState[];
   nextBulletId: number;

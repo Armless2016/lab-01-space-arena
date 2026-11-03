@@ -29,7 +29,7 @@ const STEP_MS = 1000 / SIM_HZ;
 const roomConfigSchema = z.object({
   id: z.string().min(1).max(64).regex(/^[-_a-zA-Z0-9]+$/),
   name: z.string().trim().min(1).max(40),
-  maxPlayers: z.number().int().min(1).max(32).default(8),
+  maxPlayers: z.number().int().min(1).max(128).default(8),
   width: z.number().int().min(320).max(65535).default(960),
   height: z.number().int().min(240).max(65535).default(540),
   asteroids: z.number().int().min(0).max(100).default(8),
@@ -40,7 +40,7 @@ const roomConfigSchema = z.object({
 const roomCreateInputSchema = z.object({
   id: z.string().trim().min(1).max(64).regex(/^[-_a-zA-Z0-9]+$/).optional(),
   name: z.string().trim().min(1).max(40).optional(),
-  maxPlayers: z.coerce.number().int().min(1).max(32).optional(),
+  maxPlayers: z.coerce.number().int().min(1).max(128).optional(),
   width: z.coerce.number().int().min(320).max(65535).optional(),
   height: z.coerce.number().int().min(240).max(65535).optional(),
   asteroids: z.coerce.number().int().min(0).max(100).optional(),
@@ -155,6 +155,11 @@ export class Room extends EventEmitter<RoomEvents> {
   #tickCallback: RoomTickCallback | null = null;
   #running = false;
   #nextPlayerId = 1;
+  #stepSamples = new Float64Array(512);
+  #stepSampleCount = 0;
+  #stepSampleIndex = 0;
+  #lastStepMs = 0;
+  #overBudgetSteps = 0;
   public readonly id: string;
   public readonly name: string;
   public readonly maxPlayers: number;
@@ -198,6 +203,11 @@ export class Room extends EventEmitter<RoomEvents> {
 
   public get summary(): RoomSummary { return makeRoomSummary(this); }
   public get seed(): number { return this.simulation.seed; }
+  public get stepMetrics(): { readonly samples: number; readonly lastMs: number; readonly p50Ms: number; readonly p95Ms: number; readonly p99Ms: number; readonly overBudgetSteps: number } {
+    const sorted = Array.from(this.#stepSamples.slice(0, this.#stepSampleCount)).sort((a, b) => a - b);
+    const at = (ratio: number): number => sorted.length === 0 ? 0 : (sorted[Math.min(sorted.length - 1, Math.ceil(sorted.length * ratio) - 1)] ?? 0);
+    return { samples: sorted.length, lastMs: this.#lastStepMs, p50Ms: at(0.5), p95Ms: at(0.95), p99Ms: at(0.99), overBudgetSteps: this.#overBudgetSteps };
+  }
   public get playerList(): Array<{ playerId: EntityId; name: string }> {
     return [...this.players.values()].map((player) => ({ playerId: player.playerId, name: player.name }));
   }
@@ -281,7 +291,13 @@ export class Room extends EventEmitter<RoomEvents> {
           player.appliedSeq = player.currentInput.seq;
           inputs.set(player.playerId, player.currentInput);
         }
+        const stepStartedAt = performance.now();
         stepSimulation(this.simulation, inputs, SIM_DT);
+        this.#lastStepMs = performance.now() - stepStartedAt;
+        if (this.#lastStepMs > STEP_MS) this.#overBudgetSteps += 1;
+        this.#stepSamples[this.#stepSampleIndex] = this.#lastStepMs;
+        this.#stepSampleIndex = (this.#stepSampleIndex + 1) % this.#stepSamples.length;
+        this.#stepSampleCount = Math.min(this.#stepSampleCount + 1, this.#stepSamples.length);
         this.#nextTickAt += STEP_MS;
         steps += 1;
         now = performance.now();
@@ -349,6 +365,9 @@ export class RoomManager extends EventEmitter<RoomManagerEvents> {
 
   public list(): RoomSummary[] { return [...this.#rooms.values()].map((room) => room.summary); }
   public get(id: string): Room | undefined { return this.#rooms.get(id); }
+  public performanceMetrics(): Array<{ readonly roomId: string; readonly players: number; readonly step: Room['stepMetrics'] }> {
+    return [...this.#rooms.values()].map((room) => ({ roomId: room.id, players: room.players.size, step: room.stepMetrics }));
+  }
 
   public async create(input: unknown): Promise<RoomSummary> {
     const parsed = roomCreateInputSchema.parse(input);

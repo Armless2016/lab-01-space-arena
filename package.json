@@ -1,7 +1,7 @@
 {
   "name": "space-arena-monorepo",
   "private": true,
-  "version": "6.0.0",
+  "version": "7.0.0",
   "type": "module",
   "workspaces": [
     "client",
@@ -16,17 +16,29 @@
     "bench:memory": "node server/bench/rss-backpressure.mjs",
     "test:shared": "tsx server/examples/shared-smoke.ts",
     "bench:protocol": "tsx server/bench/protocol-size.ts",
-    "typecheck": "tsc --noEmit -p tsconfig.json"
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:e2e": "playwright test",
+    "test:all": "npm run typecheck && npm run lint && npm run test:coverage && npm run build && npm run test:e2e",
+    "loadtest": "tsx scripts/load-test.ts",
+    "bots:record": "tsx scripts/bots.ts",
+    "v8:trace": "node --trace-opt --trace-deopt server/examples/v8-shapes.mjs"
   },
   "devDependencies": {
-    "@eslint/js": "latest",
-    "concurrently": "latest",
-    "eslint": "latest",
-    "globals": "latest",
+    "@eslint/js": "^9.22.0",
+    "concurrently": "^9.1.2",
+    "eslint": "^9.22.0",
+    "globals": "^16.0.0",
     "@types/node": "^22.15.0",
     "@types/ws": "^8.18.1",
     "typescript": "^5.8.3",
     "tsx": "^4.19.3",
-    "typescript-eslint": "^8.29.0"
+    "typescript-eslint": "^8.29.0",
+    "vitest": "^3.2.4",
+    "@vitest/coverage-v8": "^3.2.4",
+    "fast-check": "^3.23.2",
+    "@playwright/test": "^1.52.0",
+    "zod": "^3.24.2"
   }
 }

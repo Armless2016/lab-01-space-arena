@@ -8,18 +8,19 @@ import {
   cloneShip,
   createBulletFromShip,
   integrateShip,
+  reconcileShip,
   inputSeq,
   type EntityId,
   type InputMessage,
   type ShipState,
   type SnapshotMessage,
   type SnapshotShip,
-  type SnapshotBullet,
-  type SnapshotAsteroid,
-  type SnapshotPickup,
   type BulletState,
 } from '@space-arena/shared';
 import type { ParsedServerMessage } from '@space-arena/shared/schemas';
+import { ObjectPool } from '@space-arena/shared/object-pool';
+import { FramePerformanceMonitor } from './performance-monitor.ts';
+import { summarizeFrameBatch } from './worker-experiment.ts';
 
 const INTERPOLATION_DELAY_MS = 100;
 const CORRECTION_TIME_MS = 100;
@@ -50,6 +51,15 @@ interface NetworkStats {
   readonly stepsPerSecond: number;
   readonly framesPerSecond: number;
   readonly frameTimeMs: number;
+  readonly frameP50Ms: number;
+  readonly frameP95Ms: number;
+  readonly frameP99Ms: number;
+  readonly gcCount: number;
+  readonly gcPauseMs: number;
+  readonly particlePoolReuses: number;
+  readonly bulletPoolReuses: number;
+  readonly activeParticles: number;
+  readonly activeLocalBullets: number;
 }
 interface NetworkGameOptions {
   readonly canvas: HTMLCanvasElement;
@@ -176,7 +186,14 @@ export function createNetworkGame({
   const scheduledTimers = new Set<ReturnType<typeof setTimeout>>();
   const names = new Map(playerNames.map((item) => [item.playerId, item.name]));
   const localBullets: BulletState[] = [];
+  const localBulletPool: BulletState[] = [];
   const effects: LocalEffect[] = [];
+  const effectPool = new ObjectPool<LocalEffect>(() => ({ x: 0, y: 0, vx: 0, vy: 0, life: 0, maxLife: 1, size: 1, color: '#ffd477' }), 256);
+  const framePerformance = new FramePerformanceMonitor(1800);
+  let cachedFramePerformance = framePerformance.snapshot();
+  let lastFramePerformanceUpdate = performance.now();
+  let particlePoolReuses = 0;
+  let bulletPoolReuses = 0;
   const firstSnapshot = copySnapshot(initialSnapshot);
   const firstShip = firstSnapshot.players.find((ship) => ship.id === playerId);
   if (!firstShip) throw new Error('Initial server snapshot does not contain this player');
@@ -240,16 +257,33 @@ export function createNetworkGame({
       const angle = Math.random() * Math.PI * 2;
       const speed = 45 + Math.random() * 170;
       const life = 0.28 + Math.random() * 0.55;
-      effects.push({ x, y, vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed, life, maxLife: life, size: 1.4 + Math.random() * 2.8, color });
+      if (effectPool.available > 0) particlePoolReuses += 1;
+      const effect = effectPool.acquire();
+      effect.x = x; effect.y = y;
+      effect.vx = Math.cos(angle) * speed; effect.vy = Math.sin(angle) * speed;
+      effect.life = life; effect.maxLife = life; effect.size = 1.4 + Math.random() * 2.8; effect.color = color;
+      effects.push(effect);
     }
   }
   function updateEffects(dt: number): void {
-    for (const effect of effects) {
+    for (let index = effects.length - 1; index >= 0; index -= 1) {
+      const effect = effects[index];
+      if (!effect) continue;
       effect.x = ((effect.x + effect.vx * dt) % room.width + room.width) % room.width;
       effect.y = ((effect.y + effect.vy * dt) % room.height + room.height) % room.height;
       effect.life -= dt;
+      if (effect.life <= 0) {
+        effects[index] = effects[effects.length - 1]!;
+        effects.pop();
+        effectPool.release(effect);
+      }
     }
-    for (let index = effects.length - 1; index >= 0; index -= 1) if ((effects[index]?.life ?? 0) <= 0) effects.splice(index, 1);
+  }
+
+  function fireLocalBullet(ship: ShipState, id: number, homing: boolean): void {
+    const reusable = localBulletPool.pop();
+    if (reusable) bulletPoolReuses += 1;
+    localBullets.push(createBulletFromShip(ship, id, playerId, homing, reusable));
   }
   function emitSnapshotAudioEvents(previousSnapshot: SnapshotMessage, snapshot: SnapshotMessage): void {
     const previousBulletKeys = new Set(previousSnapshot.bullets.map((bullet) => `${bullet.ownerId}:${bullet.id}`));
@@ -301,11 +335,10 @@ export function createNetworkGame({
       const wasVisible = { x: prediction.x + correction.x, y: prediction.y + correction.y };
       authoritative = shipStateFromSnapshot(localServerShip);
       localShotsFired = Math.max(localShotsFired, localServerShip.shotsFired);
-      const pending = history.filter((input) => Number(input.seq) > Number(ack));
-      history.splice(0, history.length, ...pending);
+      const reconciled = reconcileShip(authoritative, history, Number(ack), SIM_DT, room);
+      history.splice(0, history.length, ...reconciled.pending);
       if (getNetworkSettings().prediction) {
-        prediction = cloneShip(authoritative);
-        for (const item of pending) prediction = integrateShip(prediction, item, SIM_DT, room).state;
+        prediction = reconciled.state;
         correction = { x: shortestWrappedDelta(wasVisible.x, prediction.x, room.width), y: shortestWrappedDelta(wasVisible.y, prediction.y, room.height) };
         correctionMagnitude = Math.hypot(correction.x, correction.y);
       } else { prediction = cloneShip(authoritative); correction = { x: 0, y: 0 }; correctionMagnitude = 0; }
@@ -367,17 +400,23 @@ export function createNetworkGame({
       }
       if (result.fired) {
         localShotsFired = prediction.shotsFired || localShotsFired + 1;
-        localBullets.push(createBulletFromShip(prediction, localBulletId, playerId, localShotsFired % 5 === 0)); localBulletId -= 1;
+        fireLocalBullet(prediction, localBulletId, localShotsFired % 5 === 0); localBulletId -= 1;
         emitGameEvent('fired', { ownerId: playerId, predicted: true });
       }
     } else if (input.fire && localFireCooldown <= 0) {
       localShotsFired += 1;
-      localBullets.push(createBulletFromShip({ ...authoritative, shotsFired: localShotsFired }, localBulletId, playerId, localShotsFired % 5 === 0));
+      fireLocalBullet({ ...authoritative, shotsFired: localShotsFired }, localBulletId, localShotsFired % 5 === 0);
       localBulletId -= 1; localFireCooldown = 0.22; emitGameEvent('fired', { ownerId: playerId, predicted: false });
     }
     localFireCooldown = Math.max(0, localFireCooldown - SIM_DT);
     for (const bullet of localBullets) { steerLocalBullet(bullet); bullet.x = ((bullet.x + bullet.vx * SIM_DT) % room.width + room.width) % room.width; bullet.y = ((bullet.y + bullet.vy * SIM_DT) % room.height + room.height) % room.height; bullet.ttl -= SIM_DT; }
-    for (let index = localBullets.length - 1; index >= 0; index -= 1) if ((localBullets[index]?.ttl ?? 0) <= 0) localBullets.splice(index, 1);
+    for (let index = localBullets.length - 1; index >= 0; index -= 1) {
+      const bullet = localBullets[index];
+      if (bullet && bullet.ttl <= 0) {
+        localBullets.splice(index, 1);
+        if (localBulletPool.length < 256) localBulletPool.push(bullet);
+      }
+    }
   }
   function findInterpolatedSnapshot(renderTime: number): InterpolationResult {
     const current = latestTimedSnapshot();
@@ -417,6 +456,16 @@ export function createNetworkGame({
   }
   function publishStats(): void {
     const now = performance.now(); const snapshot = latestTimedSnapshot().snapshot;
+    if (now - lastFramePerformanceUpdate >= 1000) {
+      lastFramePerformanceUpdate = now;
+      const sampleBatch = framePerformance.copySamples();
+      const gc = framePerformance.gcSummary();
+      void summarizeFrameBatch(sampleBatch).then((summary) => {
+        cachedFramePerformance = { ...summary, ...gc };
+      }).catch(() => {
+        cachedFramePerformance = framePerformance.snapshot();
+      });
+    }
     onStats({
       rttMs, snapshotAgeMs: Math.max(0, lastSnapshotServerAgeMs + now - lastSnapshotAppliedAt), bytesPerSecond: trafficBytesPerSecond(),
       inputQueue: history.length, correctionPx: correctionMagnitude, droppedPackets, protocol, tick: Number(snapshot.tick),
@@ -424,12 +473,19 @@ export function createNetworkGame({
       pickups: snapshot.pickups.filter((pickup) => pickup.active).length,
       entities: snapshot.players.length + snapshot.enemies.length + snapshot.bullets.length + snapshot.asteroids.length + snapshot.pickups.length,
       stepsPerSecond, framesPerSecond, frameTimeMs,
+      frameP50Ms: cachedFramePerformance.p50,
+      frameP95Ms: cachedFramePerformance.p95,
+      frameP99Ms: cachedFramePerformance.p99,
+      gcCount: cachedFramePerformance.gcCount,
+      gcPauseMs: cachedFramePerformance.gcPauseMs,
+      particlePoolReuses, bulletPoolReuses,
+      activeParticles: effects.length, activeLocalBullets: localBullets.length,
     });
   }
   function frame(now: number): void {
     if (!running) return;
     const rawDelta = previousFrame === 0 ? 0 : Math.max(0, (now - previousFrame) / 1000);
-    const delta = Math.min(MAX_FRAME_DELTA, rawDelta); frameTimeMs = delta * 1000; previousFrame = now; accumulator += delta; frames += 1;
+    const delta = Math.min(MAX_FRAME_DELTA, rawDelta); frameTimeMs = delta * 1000; framePerformance.record(frameTimeMs); previousFrame = now; accumulator += delta; frames += 1;
     let stepsThisFrame = 0;
     while (accumulator >= SIM_DT && stepsThisFrame < 5) { stepPrediction(); updateEffects(SIM_DT); accumulator -= SIM_DT; renderedSteps += 1; stepsThisFrame += 1; }
     render(now);
@@ -450,6 +506,9 @@ export function createNetworkGame({
   function stop(): void {
     running = false; cancelAnimationFrame(frameHandle); window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('blur', onBlur);
     for (const timer of scheduledTimers) clearTimeout(timer); scheduledTimers.clear(); keys.clear(); renderer.destroy();
+    effectPool.releaseMany(effects); effects.length = 0;
+    localBulletPool.push(...localBullets); localBullets.length = 0;
+    framePerformance.disconnect();
   }
   return { start, stop, handleServerMessage, handleSnapshot, get playerId() { return playerId; } };
 }

@@ -1,6 +1,6 @@
 {
   "name": "@space-arena/shared",
-  "version": "6.0.0",
+  "version": "7.0.0",
   "private": true,
   "type": "module",
   "exports": {
@@ -10,7 +10,8 @@
     "./protocol": "./protocol.ts",
     "./protocol.js": "./protocol.ts",
     "./types": "./types.ts",
-    "./schemas": "./schemas.ts"
+    "./schemas": "./schemas.ts",
+    "./object-pool": "./object-pool.ts"
   },
   "dependencies": {
     "zod": "^3.24.2"
