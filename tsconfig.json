@@ -19,7 +19,16 @@
     "verbatimModuleSyntax": true,
     "allowImportingTsExtensions": true,
     "skipLibCheck": true,
-    "noEmit": true
+    "noEmit": true,
+    "baseUrl": ".",
+    "paths": {
+      "@space-arena/shared": [
+        "shared/index.ts"
+      ],
+      "@space-arena/shared/*": [
+        "shared/*.ts"
+      ]
+    }
   },
   "include": [
     "shared/**/*.ts",

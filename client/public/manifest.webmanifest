@@ -1,0 +1,17 @@
+{
+  "id": "/",
+  "name": "Space Arena Multiplayer",
+  "short_name": "Space Arena",
+  "description": "Server-authoritative real-time space arena multiplayer game.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "landscape",
+  "background_color": "#071426",
+  "theme_color": "#071426",
+  "categories": ["games", "entertainment"],
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

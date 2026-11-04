@@ -178,6 +178,7 @@ export function createNetworkGame({
   const renderer = createRenderer(canvas);
   renderer.setAssets(assets);
   const keys = new Set<string>();
+  const touchButtons = Array.from(document.querySelectorAll<HTMLButtonElement>('[data-touch-key]'));
   const random = seededRandom(((seed >>> 0) ^ (Number(playerId) * 7237) ^ 101) >>> 0);
   const history: InputMessage[] = [];
   const sentAtBySeq = new Map<number, number>();
@@ -350,6 +351,9 @@ export function createNetworkGame({
       case 'snapshot': handleSnapshot(message, bytes); return;
       case 'players': names.clear(); for (const player of message.players) names.set(player.playerId, player.name); return;
       case 'joined': case 'chat': case 'system': case 'error': return;
+      // ReconnectingSocket handles shutdown and emits its dedicated `shutdown` event;
+      // main.ts listens to that event and returns the player to the lobby.
+      case 'shutdown': return;
       default: { const exhaustive: never = message; throw new Error(`Unhandled server message: ${String(exhaustive)}`); }
     }
   }
@@ -500,11 +504,29 @@ export function createNetworkGame({
   }
   function onKeyUp(event: KeyboardEvent): void { keys.delete(event.code); }
   function onBlur(): void { keys.clear(); }
+  function onTouchDown(event: PointerEvent): void {
+    const button = event.currentTarget;
+    if (!(button instanceof HTMLButtonElement)) return;
+    event.preventDefault();
+    const key = button.dataset.touchKey;
+    if (key) keys.add(key);
+    button.setPointerCapture(event.pointerId);
+  }
+  function onTouchUp(event: PointerEvent): void {
+    const button = event.currentTarget;
+    if (!(button instanceof HTMLButtonElement)) return;
+    event.preventDefault();
+    const key = button.dataset.touchKey;
+    if (key) keys.delete(key);
+  }
   function start(): void {
-    if (running) return; running = true; window.addEventListener('keydown', onKeyDown); window.addEventListener('keyup', onKeyUp); window.addEventListener('blur', onBlur); frameHandle = requestAnimationFrame(frame);
+    if (running) return; running = true; window.addEventListener('keydown', onKeyDown); window.addEventListener('keyup', onKeyUp); window.addEventListener('blur', onBlur);
+    for (const button of touchButtons) { button.addEventListener('pointerdown', onTouchDown); button.addEventListener('pointerup', onTouchUp); button.addEventListener('pointercancel', onTouchUp); button.addEventListener('lostpointercapture', onTouchUp); }
+    frameHandle = requestAnimationFrame(frame);
   }
   function stop(): void {
     running = false; cancelAnimationFrame(frameHandle); window.removeEventListener('keydown', onKeyDown); window.removeEventListener('keyup', onKeyUp); window.removeEventListener('blur', onBlur);
+    for (const button of touchButtons) { button.removeEventListener('pointerdown', onTouchDown); button.removeEventListener('pointerup', onTouchUp); button.removeEventListener('pointercancel', onTouchUp); button.removeEventListener('lostpointercapture', onTouchUp); }
     for (const timer of scheduledTimers) clearTimeout(timer); scheduledTimers.clear(); keys.clear(); renderer.destroy();
     effectPool.releaseMany(effects); effects.length = 0;
     localBulletPool.push(...localBullets); localBullets.length = 0;

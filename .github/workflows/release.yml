@@ -1,0 +1,194 @@
+name: Release Docker image and deploy
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: space-arena-production-release
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify release candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Install Playwright Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Full quality gate
+        run: npm run test:all
+      - name: Deterministic shared simulation smoke test
+        run: npm run test:shared
+      - name: Build the exact release container
+        run: docker build --build-arg BUILD_SHA=${GITHUB_SHA} -t space-arena:local .
+      - name: Verify image size and graceful WebSocket shutdown
+        run: npm run docker:test:shutdown
+      - name: Verify malformed-frame isolation
+        shell: bash
+        run: |
+          npm run dev --workspace=./server > /tmp/space-arena-server.log 2>&1 &
+          SERVER_PID=$!
+          cleanup() { kill "$SERVER_PID" 2>/dev/null || true; }
+          trap cleanup EXIT
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:3000/health >/dev/null; then break; fi
+            sleep 1
+          done
+          curl --fail http://127.0.0.1:3000/health
+          npm run test:ws-abuse
+
+  publish:
+    name: Publish image to GHCR
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+          labels: |
+            org.opencontainers.image.title=Space Arena
+            org.opencontainers.image.description=Server-authoritative multiplayer browser game
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ github.ref_name }}
+      - name: Build and publish image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            BUILD_SHA=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Deployment instructions when VPS deployment is disabled
+        if: ${{ vars.DEPLOY_ENABLED != 'true' }}
+        run: |
+          echo 'Image published to GHCR. Set repository variable DEPLOY_ENABLED=true and configure the DEPLOY_* secrets to publish the public HTTPS/WSS service.' >> "$GITHUB_STEP_SUMMARY"
+
+  deploy:
+    name: Deploy one authoritative process to VPS
+    needs: publish
+    if: ${{ vars.DEPLOY_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate deployment settings and install SSH identity
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+        run: |
+          test -n "$DEPLOY_HOST" || { echo 'DEPLOY_HOST is required' >&2; exit 1; }
+          test -n "$DEPLOY_USER" || { echo 'DEPLOY_USER is required' >&2; exit 1; }
+          test -n "$DEPLOY_SSH_KEY" || { echo 'DEPLOY_SSH_KEY is required' >&2; exit 1; }
+          test -n "$DEPLOY_KNOWN_HOSTS" || { echo 'DEPLOY_KNOWN_HOSTS is required; verify the VPS SSH host key before saving it' >&2; exit 1; }
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/space_arena_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/space_arena_key ~/.ssh/known_hosts
+      - name: Prepare production Compose environment
+        env:
+          APP_DOMAIN: ${{ secrets.DEPLOY_APP_DOMAIN }}
+          IMAGE_TAG: ${{ github.ref_name }}
+          BUILD_SHA: ${{ github.sha }}
+        run: |
+          test -n "$APP_DOMAIN" || { echo 'DEPLOY_APP_DOMAIN is required' >&2; exit 1; }
+          case "$APP_DOMAIN" in *'/'*|*' '*|http://*|https://*) echo 'DEPLOY_APP_DOMAIN must be a hostname without scheme or path' >&2; exit 1 ;; esac
+          REPOSITORY_LOWER=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+          mkdir -p .deploy
+          cp deploy/Caddyfile deploy/docker-compose.production.yml .deploy/
+          cat > .deploy/.env <<EOF
+          APP_DOMAIN=$APP_DOMAIN
+          GHCR_IMAGE=ghcr.io/$REPOSITORY_LOWER
+          IMAGE_TAG=$IMAGE_TAG
+          BUILD_SHA=$BUILD_SHA
+          NODE_ENV=production
+          PORT=3000
+          ALLOWED_ORIGINS=https://$APP_DOMAIN
+          ALLOW_MISSING_ORIGIN=false
+          TRUST_PROXY=true
+          MAX_CONNECTIONS_PER_IP=32
+          MAX_ROOMS=100
+          MAX_PLAYERS_PER_ROOM=16
+          MAX_MESSAGES_PER_SECOND=120
+          WS_MAX_PAYLOAD=16384
+          LOG_LEVEL=info
+          EOF
+      - name: Authenticate the VPS to GHCR when the image package is private
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+          DEPLOY_GHCR_USERNAME: ${{ secrets.DEPLOY_GHCR_USERNAME }}
+          DEPLOY_GHCR_TOKEN: ${{ secrets.DEPLOY_GHCR_TOKEN }}
+        shell: bash
+        run: |
+          if [ -n "$DEPLOY_GHCR_TOKEN" ]; then
+            test -n "$DEPLOY_GHCR_USERNAME" || { echo 'DEPLOY_GHCR_USERNAME is required when DEPLOY_GHCR_TOKEN is set' >&2; exit 1; }
+            [[ "$DEPLOY_GHCR_USERNAME" =~ ^[A-Za-z0-9-]+$ ]] || { echo 'DEPLOY_GHCR_USERNAME contains unsupported characters' >&2; exit 1; }
+            PORT="${DEPLOY_SSH_PORT:-22}"
+            DEST="$DEPLOY_USER@$DEPLOY_HOST"
+            printf '%s' "$DEPLOY_GHCR_TOKEN" | ssh -i ~/.ssh/space_arena_key -o BatchMode=yes -p "$PORT" "$DEST" "docker login ghcr.io --username '$DEPLOY_GHCR_USERNAME' --password-stdin"
+          else
+            echo 'No GHCR read token supplied. The package must be public for anonymous VPS pulls.'
+          fi
+      - name: Copy deployment files and update the VPS
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_PORT: ${{ secrets.DEPLOY_SSH_PORT }}
+        run: |
+          PORT="${DEPLOY_SSH_PORT:-22}"
+          DEST="$DEPLOY_USER@$DEPLOY_HOST"
+          ssh -i ~/.ssh/space_arena_key -o BatchMode=yes -p "$PORT" "$DEST" 'mkdir -p ~/space-arena'
+          scp -i ~/.ssh/space_arena_key -o BatchMode=yes -P "$PORT" .deploy/Caddyfile .deploy/docker-compose.production.yml .deploy/.env "$DEST:~/space-arena/"
+          ssh -i ~/.ssh/space_arena_key -o BatchMode=yes -p "$PORT" "$DEST" 'cd ~/space-arena && docker compose --env-file .env -f docker-compose.production.yml pull && docker compose --env-file .env -f docker-compose.production.yml up -d --remove-orphans'
+          ssh -i ~/.ssh/space_arena_key -o BatchMode=yes -p "$PORT" "$DEST" 'cd ~/space-arena && docker compose --env-file .env -f docker-compose.production.yml ps'
+      - name: Verify public HTTPS health and deployed Git SHA
+        env:
+          APP_DOMAIN: ${{ secrets.DEPLOY_APP_DOMAIN }}
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          for attempt in $(seq 1 30); do
+            if body=$(curl --fail --silent --show-error "https://$APP_DOMAIN/health"); then
+              actual_sha=$(printf '%s' "$body" | node -e 'let s="";process.stdin.on("data",c=>s+=c).on("end",()=>{try{process.stdout.write(JSON.parse(s).gitSha ?? "")}catch{process.exit(2)}})')
+              if [ "$actual_sha" = "$EXPECTED_SHA" ]; then
+                echo "Public deployment is live at https://$APP_DOMAIN (wss://$APP_DOMAIN/ws) with SHA $actual_sha" >> "$GITHUB_STEP_SUMMARY"
+                exit 0
+              fi
+            fi
+            sleep 3
+          done
+          echo 'Deployment did not report the expected BUILD_SHA from /health.' >&2
+          exit 1

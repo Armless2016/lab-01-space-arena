@@ -7,6 +7,8 @@ import { ZodError } from 'zod';
 import type { ServerConfig } from './config.ts';
 import { readJsonBody, RequestBodyError } from './request.ts';
 import type { RoomManager } from './rooms.ts';
+import type { RuntimeMetrics } from './runtime-metrics.ts';
+import { logger } from './logger.ts';
 
 const MIME = new Map<string, string>([
   ['.html', 'text/html; charset=utf-8'],
@@ -16,6 +18,8 @@ const MIME = new Map<string, string>([
   ['.png', 'image/png'],
   ['.wav', 'audio/wav'],
   ['.svg', 'image/svg+xml'],
+  ['.webmanifest', 'application/manifest+json; charset=utf-8'],
+  ['.ico', 'image/x-icon'],
 ]);
 
 function json(res: ServerResponse, status: number, data: unknown): void {
@@ -27,7 +31,9 @@ function json(res: ServerResponse, status: number, data: unknown): void {
 }
 
 function rejectTraversal(urlPath: string): boolean {
-  const decoded = decodeURIComponent(urlPath);
+  let decoded: string;
+  try { decoded = decodeURIComponent(urlPath); }
+  catch { return true; }
   return decoded.split('/').some((segment) => segment === '..') || decoded.includes('\\..');
 }
 
@@ -46,28 +52,55 @@ async function serveStatic(res: ServerResponse, pathname: string, clientDistDir:
     });
     res.statusCode = 200;
     res.setHeader('Content-Type', MIME.get(path.extname(filePath)) ?? 'application/octet-stream');
+    if (path.basename(filePath) === 'service-worker.js' || path.basename(filePath) === 'index.html' || path.basename(filePath) === 'manifest.webmanifest') {
+      res.setHeader('Cache-Control', 'no-cache');
+    }
     await pipeline(stream, res);
   } catch {
     json(res, 404, { error: pathname === '/' ? 'client build missing; run npm run build' : 'not found' });
   }
 }
 
-export function createHttpHandler(options: { readonly config: ServerConfig; readonly rooms: RoomManager }) {
-  const { config, rooms } = options;
+export interface ServerReadiness { ready: boolean; shuttingDown: boolean; canAcceptPlayers?: () => boolean }
+
+export function createHttpHandler(options: { readonly config: ServerConfig; readonly rooms: RoomManager; readonly metrics: RuntimeMetrics; readonly readiness: ServerReadiness; readonly connectionCount: () => number }) {
+  const { config, rooms, metrics, readiness, connectionCount } = options;
   return async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
     try {
       const url = new URL(req.url ?? '/', `http://${req.headers.host || 'localhost'}`);
       const { pathname } = url;
       if (pathname === '/health' && req.method === 'GET') {
-        json(res, 200, { ok: true, service: 'space-arena-server', time: new Date().toISOString() });
+        json(res, 200, { ok: true, service: 'space-arena-server', gitSha: config.buildSha, time: new Date().toISOString() });
+        return;
+      }
+      if (pathname === '/ready' && req.method === 'GET') {
+        const capacityAvailable = readiness.canAcceptPlayers?.() ?? true;
+        const ready = readiness.ready && !readiness.shuttingDown && capacityAvailable;
+        json(res, ready ? 200 : 503, { ready, shuttingDown: readiness.shuttingDown });
+        return;
+      }
+      if (pathname === '/metrics' && req.method === 'GET') {
+        const payload = metrics.toPrometheus(rooms, connectionCount());
+        res.statusCode = 200;
+        res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+        res.setHeader('Cache-Control', 'no-store');
+        res.end(payload);
+        return;
+      }
+      if (readiness.shuttingDown) {
+        json(res, 503, { error: 'server is shutting down' });
         return;
       }
       if (pathname === '/api/metrics' && req.method === 'GET') {
-        json(res, 200, { rooms: rooms.performanceMetrics() });
+        json(res, 200, metrics.snapshot(rooms, connectionCount()));
         return;
       }
       if (pathname === '/api/rooms' && req.method === 'GET') { json(res, 200, rooms.list()); return; }
       if (pathname === '/api/rooms' && req.method === 'POST') {
+        if (!readiness.ready || readiness.shuttingDown) {
+          json(res, 503, { error: 'server is not ready to accept new rooms' });
+          return;
+        }
         const body = await readJsonBody(req, 8192);
         const created = await rooms.create(body);
         json(res, 201, created);
@@ -109,7 +142,7 @@ export function createHttpHandler(options: { readonly config: ServerConfig; read
       if (error instanceof RequestBodyError && error.code === 'BAD_JSON') { json(res, 400, { error: error.message }); return; }
       if (error instanceof ZodError) { json(res, 400, { error: 'invalid request', issues: error.issues }); return; }
       if (error instanceof Error && error.message === 'Invalid or duplicate room id') { json(res, 400, { error: error.message }); return; }
-      console.error('[http]', error);
+      logger.error({ err: error, method: req.method, path: req.url?.split('?')[0] }, 'http_request_failed');
       if (!res.headersSent) json(res, 500, { error: 'internal server error' });
       else res.destroy(error instanceof Error ? error : new Error('unknown response error'));
     }

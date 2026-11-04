@@ -2,105 +2,60 @@ import js from '@eslint/js';
 import globals from 'globals';
 import tseslint from 'typescript-eslint';
 
-const browserSourceFiles = ['client/**/*.{js,mjs,cjs,ts,tsx}'];
-const workerSourceFiles = ['client/src/workers/**/*.{js,mjs,cjs,ts}'];
-const sharedSourceFiles = ['shared/**/*.{js,mjs,cjs,ts}'];
-const serverSourceFiles = ['server/**/*.{js,mjs,cjs,ts}'];
-const testFiles = [
-  'client/tests/**/*.{js,mjs,cjs,ts}',
-  'shared/tests/**/*.{js,mjs,cjs,ts}',
-  'server/tests/**/*.{js,mjs,cjs,ts}',
-  'e2e/**/*.{js,mjs,cjs,ts}',
-];
-
 export default tseslint.config(
   {
     ignores: [
-      '**/node_modules/**',
       '**/dist/**',
       '**/logs/**',
       '**/coverage/**',
       '**/playwright-report/**',
       '**/test-results/**',
       'server/bench/*.csv',
+      '**/node_modules/**',
     ],
   },
   js.configs.recommended,
   ...tseslint.configs.recommended,
+  // Browser application files, including legacy JS modules kept from Labs 1–5.
   {
-    // The repository still contains legacy .js modules from Labs 1–5.
-    // They are browser modules too, so browser globals must apply to .js and .ts.
-    files: browserSourceFiles,
-    languageOptions: {
-      globals: globals.browser,
-    },
-    rules: {
-      'no-console': 'off',
-    },
+    files: ['client/**/*.{js,mjs,cjs,ts}'],
+    languageOptions: { globals: globals.browser },
+    rules: { 'no-console': 'off' },
   },
+  // A service worker has a different global scope from an ordinary browser page.
   {
-    // Shared simulation/protocol is intentionally isomorphic: browser + Node.
-    files: sharedSourceFiles,
+    files: ['client/public/service-worker.js'],
     languageOptions: {
       globals: {
         ...globals.browser,
-        ...globals.node,
+        ...globals.serviceworker,
       },
     },
-    rules: {
-      'no-console': 'off',
-    },
   },
+  // Node.js server files, including the older .js modules retained during migration.
   {
-    // Worker scripts run outside the regular Window global scope.
-    files: workerSourceFiles,
-    languageOptions: {
-      globals: {
-        ...globals.browser,
-        ...globals.worker,
-      },
-    },
-    rules: {
-      'no-console': 'off',
-    },
+    files: ['server/**/*.{js,mjs,cjs,ts}'],
+    languageOptions: { globals: globals.node },
+    rules: { 'no-console': 'off' },
   },
+  // Shared code runs in both the browser and Node.js; use only their shared globals.
   {
-    files: serverSourceFiles,
-    languageOptions: {
-      globals: globals.node,
-    },
-    rules: {
-      'no-console': 'off',
-    },
+    files: ['shared/**/*.{js,mjs,cjs,ts}'],
+    languageOptions: { globals: globals['shared-node-browser'] },
+    rules: { 'no-console': 'off' },
   },
+  // Node-based scripts, tests, Playwright, and root configuration files.
   {
-    // Test APIs are imported in TS tests; this also supports any legacy JS tests.
-    files: testFiles,
-    languageOptions: {
-      globals: {
-        ...globals.node,
-        ...globals.browser,
-        ...globals.vitest,
-      },
-    },
-    rules: {
-      'no-console': 'off',
-    },
-  },
-  {
-    // Root tooling/configuration files execute in Node.js.
     files: [
-      '*.config.{js,mjs,cjs,ts}',
       'scripts/**/*.{js,mjs,cjs,ts}',
-      'server/bench/**/*.{js,mjs,cjs,ts}',
+      'e2e/**/*.{js,mjs,cjs,ts}',
       'server/examples/**/*.{js,mjs,cjs,ts}',
-      'eslint.config.js',
+      'server/bench/**/*.{js,mjs,cjs,ts}',
+      '*.config.{js,mjs,cjs,ts}',
+      'playwright.config.{js,mjs,cjs,ts}',
+      'vitest.config.{js,mjs,cjs,ts}',
     ],
-    languageOptions: {
-      globals: globals.node,
-    },
-    rules: {
-      'no-console': 'off',
-    },
+    languageOptions: { globals: globals.node },
+    rules: { 'no-console': 'off' },
   },
 );

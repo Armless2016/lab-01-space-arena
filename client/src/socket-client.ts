@@ -40,6 +40,7 @@ export class ReconnectingSocket extends EventTarget {
   #attempt = 0;
   #timer: ReturnType<typeof setTimeout> | null = null;
   #stopped = false;
+  #shutdownHandling = false;
   #joined: JoinedRoom | null = null;
   #protocol: SocketProtocol = 'binary';
   readonly maxQueue: number;
@@ -52,7 +53,7 @@ export class ReconnectingSocket extends EventTarget {
     this.maxDelay = maxDelay;
   }
 
-  connect(): void { this.#stopped = false; this.#open(); }
+  connect(): void { this.#stopped = false; this.#attempt = 0; this.#open(); }
 
   join(roomId: string, playerName: string, protocol: string = 'binary'): void {
     this.#protocol = protocol === 'json' ? 'json' : 'binary';
@@ -104,7 +105,9 @@ export class ReconnectingSocket extends EventTarget {
   #open(): void {
     if (this.#stopped || this.#socket) return;
     this.#state({ state: 'connecting' });
-    const socket = new WebSocket(this.#url);
+    const target = new URL(this.#url, window.location.href);
+    target.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const socket = new WebSocket(target.toString());
     socket.binaryType = 'arraybuffer';
     this.#socket = socket;
     socket.addEventListener('open', () => {
@@ -128,6 +131,14 @@ export class ReconnectingSocket extends EventTarget {
         }
         const detail: IncomingMessage = { ...message, __transportBytes: bytes };
         this.dispatchEvent(new CustomEvent<IncomingMessage>('message', { detail }));
+        if (message.type === 'shutdown') {
+          this.#shutdownHandling = true;
+          this.#stopped = true;
+          this.#joined = null;
+          this.#queue = [];
+          this.dispatchEvent(new CustomEvent('shutdown', { detail: message }));
+          if (socket.readyState === WebSocket.OPEN) socket.close(1001, 'server shutdown');
+        }
       } catch (error: unknown) {
         this.dispatchEvent(new CustomEvent<SocketErrorDetail>('error', { detail: { error: new Error(`Invalid server frame: ${errorText(error)}`) } }));
       }
@@ -136,6 +147,11 @@ export class ReconnectingSocket extends EventTarget {
     socket.addEventListener('close', (event: CloseEvent) => {
       if (this.#socket === socket) this.#socket = null;
       this.#state({ state: 'closed', code: event.code, reason: event.reason });
+      if (event.code === 1001 && /shutdown/i.test(event.reason)) {
+        this.#stopped = true; this.#joined = null;
+        if (!this.#shutdownHandling) this.dispatchEvent(new CustomEvent('shutdown', { detail: { reason: event.reason } }));
+        return;
+      }
       if (!this.#stopped && event.code !== 1008 && event.code !== 1009) this.#scheduleReconnect();
     });
   }
@@ -151,6 +167,12 @@ export class ReconnectingSocket extends EventTarget {
   #scheduleReconnect(): void {
     if (this.#timer !== null) clearTimeout(this.#timer);
     const base = Math.min(this.maxDelay, 250 * 2 ** this.#attempt);
+    if (this.#attempt >= 6) {
+      this.#stopped = true;
+      this.#joined = null;
+      this.dispatchEvent(new CustomEvent('unavailable', { detail: { reason: 'server_unavailable' } }));
+      return;
+    }
     const delay = base + Math.random() * 180;
     this.#attempt += 1;
     this.#timer = setTimeout(() => { this.#timer = null; this.#open(); }, delay);

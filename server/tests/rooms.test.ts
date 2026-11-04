@@ -66,7 +66,7 @@ describe('Room and RoomManager', () => {
     const socket = fakeSocket(); room.join(socket, 'Pilot');
     const chat = vi.fn(); room.on('chat', chat);
     expect(room.chat(socket, ' hello ')).toBe(true);
-    expect(chat).toHaveBeenCalledWith({ roomId: 'vitest-room', playerName: 'Pilot', message: 'hello' });
+    expect(chat).toHaveBeenCalledWith({ roomId: 'vitest-room', playerId: 1, playerName: 'Pilot', message: 'hello' });
     await manager.closeAll();
   });
   it('rejects chat from sockets outside a room', async () => {

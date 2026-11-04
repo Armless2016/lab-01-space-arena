@@ -1,19 +1,83 @@
 {
   "name": "@space-arena/shared",
-  "version": "7.0.0",
+  "version": "8.0.0",
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./index.ts",
-    "./simulation": "./simulation.ts",
-    "./simulation.js": "./simulation.ts",
-    "./protocol": "./protocol.ts",
-    "./protocol.js": "./protocol.ts",
-    "./types": "./types.ts",
-    "./schemas": "./schemas.ts",
-    "./object-pool": "./object-pool.ts"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "development": "./index.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./simulation": {
+      "types": "./dist/simulation.d.ts",
+      "development": "./simulation.ts",
+      "import": "./dist/simulation.js",
+      "default": "./dist/simulation.js"
+    },
+    "./simulation.js": {
+      "types": "./dist/simulation.d.ts",
+      "development": "./simulation.ts",
+      "import": "./dist/simulation.js",
+      "default": "./dist/simulation.js"
+    },
+    "./protocol": {
+      "types": "./dist/protocol.d.ts",
+      "development": "./protocol.ts",
+      "import": "./dist/protocol.js",
+      "default": "./dist/protocol.js"
+    },
+    "./protocol.js": {
+      "types": "./dist/protocol.d.ts",
+      "development": "./protocol.ts",
+      "import": "./dist/protocol.js",
+      "default": "./dist/protocol.js"
+    },
+    "./types": {
+      "types": "./dist/types.d.ts",
+      "development": "./types.ts",
+      "import": "./dist/types.js",
+      "default": "./dist/types.js"
+    },
+    "./schemas": {
+      "types": "./dist/schemas.d.ts",
+      "development": "./schemas.ts",
+      "import": "./dist/schemas.js",
+      "default": "./dist/schemas.js"
+    },
+    "./object-pool": {
+      "types": "./dist/object-pool.d.ts",
+      "development": "./object-pool.ts",
+      "import": "./dist/object-pool.js",
+      "default": "./dist/object-pool.js"
+    },
+    "./vector2": {
+      "types": "./dist/vector2.d.ts",
+      "development": "./vector2.ts",
+      "import": "./dist/vector2.js",
+      "default": "./dist/vector2.js"
+    },
+    "./collision": {
+      "types": "./dist/collision.d.ts",
+      "development": "./collision.ts",
+      "import": "./dist/collision.js",
+      "default": "./dist/collision.js"
+    },
+    "./netcode": {
+      "types": "./dist/netcode.d.ts",
+      "development": "./netcode.ts",
+      "import": "./dist/netcode.js",
+      "default": "./dist/netcode.js"
+    }
   },
   "dependencies": {
     "zod": "^3.24.2"
-  }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json"
+  },
+  "files": [
+    "dist"
+  ]
 }

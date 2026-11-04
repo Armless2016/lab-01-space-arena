@@ -11,6 +11,7 @@ export default defineConfig(({ mode }) => {
 
   return {
     root: CLIENT_ROOT,
+    resolve: { conditions: mode === 'development' ? ['module', 'browser', 'development'] : ['module', 'browser'] },
     server: {
       port: 5173,
       proxy: {

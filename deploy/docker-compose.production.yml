@@ -1,0 +1,65 @@
+services:
+  app:
+    image: ${GHCR_IMAGE:?set GHCR_IMAGE}:${IMAGE_TAG:?set IMAGE_TAG}
+    container_name: space-arena-app
+    restart: unless-stopped
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    expose:
+      - "3000"
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      BUILD_SHA: ${BUILD_SHA:-unknown}
+      ALLOWED_ORIGINS: https://${APP_DOMAIN:?set APP_DOMAIN}
+      TRUST_PROXY: "true"
+      ALLOW_MISSING_ORIGIN: "false"
+      MAX_CONNECTIONS_PER_IP: ${MAX_CONNECTIONS_PER_IP:-32}
+      MAX_ROOMS: ${MAX_ROOMS:-100}
+      MAX_PLAYERS_PER_ROOM: ${MAX_PLAYERS_PER_ROOM:-16}
+      MAX_MESSAGES_PER_SECOND: ${MAX_MESSAGES_PER_SECOND:-120}
+      WS_MAX_PAYLOAD: ${WS_MAX_PAYLOAD:-16384}
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+    volumes:
+      - arena-logs:/app/server/logs
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+    networks: [arena]
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: space-arena-caddy
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?set APP_DOMAIN}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [arena]
+
+networks:
+  arena:
+    driver: bridge
+
+volumes:
+  arena-logs:
+  caddy-data:
+  caddy-config:

@@ -31,6 +31,8 @@ button:disabled { cursor: wait; opacity: 0.55; }
 h1, h2, p { margin: 0; }
 h1 { font-size: 1.55rem; }
 .topbar p, .panel p { margin-top: 5px; color: #9eacc8; font-size: 0.92rem; line-height: 1.55; }
+#installPwaBtn { border: 1px solid rgba(110, 205, 255, .35); border-radius: 9px; padding: 8px 12px; color: #eaf2ff; background: #153653; }
+#installPwaBtn:hover { background: #1d496d; }
 .hud { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .hud span { border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 10px; padding: 7px 9px; color: #a9b8d6; font-size: 0.8rem; background: rgba(255, 255, 255, 0.03); }
 .hud strong { color: #f1f6ff; }
@@ -74,3 +76,19 @@ h1 { font-size: 1.55rem; }
 .network-hint { margin-top: 14px !important; }
 @media (max-width: 840px) { .network-controls { grid-template-columns: 1fr 1fr; } .netgraph { grid-template-columns: repeat(2, minmax(100px, 1fr)); } }
 @media (max-width: 520px) { .network-controls { grid-template-columns: 1fr; } }
+
+
+/* Optional touch controls are shown on touch-first compact screens (PWA/mobile). */
+.touch-controls { display: none; }
+@media (max-width: 900px) and (pointer: coarse) {
+  .touch-controls { position: absolute; right: 14px; bottom: 14px; display: flex; align-items: end; gap: 12px; z-index: 5; touch-action: none; user-select: none; -webkit-user-select: none; }
+  .touch-dpad { display: grid; grid-template-columns: repeat(3, 46px); grid-template-rows: repeat(2, 46px); gap: 5px; }
+  .touch-dpad button, .touch-fire { min-width: 46px; min-height: 46px; border: 1px solid rgba(160,210,255,.45); border-radius: 12px; color: #eef7ff; background: rgba(18,48,78,.86); font-size: 1.1rem; font-weight: 700; touch-action: none; }
+  .touch-dpad button:nth-child(1) { grid-column: 2; grid-row: 1; }
+  .touch-dpad button:nth-child(2) { grid-column: 1; grid-row: 2; }
+  .touch-dpad button:nth-child(3) { grid-column: 2; grid-row: 2; }
+  .touch-dpad button:nth-child(4) { grid-column: 3; grid-row: 2; }
+  .touch-fire { min-width: 68px; min-height: 68px; border-radius: 50%; background: rgba(122, 43, 57, .92); font-size: .78rem; }
+  .touch-dpad button:active, .touch-fire:active { background: rgba(38, 105, 155, .96); transform: scale(.96); }
+  #controls { max-width: calc(100% - 24px); right: 12px; bottom: 8px; }
+}

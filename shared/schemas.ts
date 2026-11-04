@@ -131,6 +131,7 @@ export const ChatServerMessageSchema = z.object({
   type: z.literal('chat'), playerName: z.string(), message: z.string(),
 }).passthrough();
 export const SystemMessageSchema = z.object({ type: z.literal('system'), text: z.string() }).passthrough();
+export const ShutdownMessageSchema = z.object({ type: z.literal('shutdown'), reason: z.string().max(64) }).strict();
 export const ServerMessageSchema = z.discriminatedUnion('type', [
   SnapshotMessageSchema,
   PlayersMessageSchema,
@@ -138,6 +139,7 @@ export const ServerMessageSchema = z.discriminatedUnion('type', [
   ErrorMessageSchema,
   ChatServerMessageSchema,
   SystemMessageSchema,
+  ShutdownMessageSchema,
 ]);
 
 export type ParsedClientMessage = z.infer<typeof ClientMessageSchema>;

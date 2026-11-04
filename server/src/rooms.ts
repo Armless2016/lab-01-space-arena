@@ -2,6 +2,7 @@ import { EventEmitter } from 'node:events';
 import { readFile } from 'node:fs/promises';
 import { performance } from 'node:perf_hooks';
 import { randomBytes } from 'node:crypto';
+import { logger } from './logger.ts';
 import type { WebSocket } from 'ws';
 import { z } from 'zod';
 import {
@@ -82,9 +83,9 @@ export interface RoomPlayer {
 }
 interface RoomEvents {
   error: [error: unknown];
-  joined: [event: { roomId: string; playerName: string; players: number }];
-  left: [event: { roomId: string; playerName: string; players: number }];
-  chat: [event: { roomId: string; playerName: string; message: string }];
+  joined: [event: { roomId: string; playerId: EntityId; playerName: string; players: number }];
+  left: [event: { roomId: string; playerId: EntityId; playerName: string; players: number }];
+  chat: [event: { roomId: string; playerId: EntityId; playerName: string; message: string }];
   input: [event: { roomId: string; playerId: EntityId; seq: InputSeq }];
   closed: [event: { roomId: string }];
 }
@@ -95,6 +96,7 @@ interface RoomManagerEvents {
 }
 type RoomTickCallback = (room: Room) => void;
 type LoggerFactory = (roomId: string) => Promise<MatchLog>;
+export interface RoomLimits { readonly maxRooms: number; readonly maxPlayersPerRoom: number }
 
 function makeRoomSummary(room: Room): RoomSummary {
   return {
@@ -194,10 +196,20 @@ export class Room extends EventEmitter<RoomEvents> {
       enemyHp: this.enemyHp,
     });
 
-    this.on('error', (error: unknown) => console.error(`[room:${this.id}]`, error));
-    this.on('joined', (event) => this.record({ type: 'join', ...event }));
-    this.on('left', (event) => this.record({ type: 'leave', ...event }));
-    this.on('chat', (event) => this.record({ type: 'chat', ...event }));
+    const roomLogger = logger.child({ roomId: this.id });
+    this.on('error', (error: unknown) => roomLogger.error({ err: error }, 'room_error'));
+    this.on('joined', (event) => {
+      this.record({ type: 'join', ...event });
+      logger.child({ roomId: this.id, playerId: event.playerId }).info({ playerName: event.playerName, players: event.players }, 'room_player_joined');
+    });
+    this.on('left', (event) => {
+      this.record({ type: 'leave', ...event });
+      logger.child({ roomId: this.id, playerId: event.playerId }).info({ playerName: event.playerName, players: event.players }, 'room_player_left');
+    });
+    this.on('chat', (event) => {
+      this.record({ type: 'chat', roomId: event.roomId, playerId: event.playerId, playerName: event.playerName, messageLength: event.message.length });
+      logger.child({ roomId: this.id, playerId: event.playerId }).info({ playerName: event.playerName, messageLength: event.message.length }, 'room_chat');
+    });
     this.on('input', (event) => this.record({ type: 'input', ...event }));
   }
 
@@ -231,7 +243,7 @@ export class Room extends EventEmitter<RoomEvents> {
     };
     this.players.set(client, player);
     addPlayer(this.simulation, playerId);
-    this.emit('joined', { roomId: this.id, playerName: safeName, players: this.players.size });
+    this.emit('joined', { roomId: this.id, playerId, playerName: safeName, players: this.players.size });
     return player;
   }
 
@@ -240,7 +252,7 @@ export class Room extends EventEmitter<RoomEvents> {
     if (!player) return null;
     this.players.delete(client);
     removePlayer(this.simulation, player.playerId);
-    this.emit('left', { roomId: this.id, playerName: player.name, players: this.players.size });
+    this.emit('left', { roomId: this.id, playerId: player.playerId, playerName: player.name, players: this.players.size });
     if (this.players.size === 0) this.stopSimulation();
     return player;
   }
@@ -323,7 +335,7 @@ export class Room extends EventEmitter<RoomEvents> {
     if (!player) return false;
     const text = message.trim().slice(0, 500);
     if (!text) return false;
-    this.emit('chat', { roomId: this.id, playerName: player.name, message: text });
+    this.emit('chat', { roomId: this.id, playerId: player.playerId, playerName: player.name, message: text });
     return true;
   }
 
@@ -346,18 +358,24 @@ export class Room extends EventEmitter<RoomEvents> {
 export class RoomManager extends EventEmitter<RoomManagerEvents> {
   #rooms = new Map<string, Room>();
   #loggerFactory: LoggerFactory;
+  readonly #limits: RoomLimits;
 
-  public constructor(loggerFactory: LoggerFactory) {
+  public constructor(loggerFactory: LoggerFactory, limits: RoomLimits = { maxRooms: 100, maxPlayersPerRoom: 16 }) {
     super();
     this.#loggerFactory = loggerFactory;
-    this.on('error', (error: unknown) => console.error('[rooms]', error));
+    this.#limits = limits;
+    this.on('error', (error: unknown) => logger.error({ err: error }, 'room_manager_error'));
+    this.on('created', (summary) => logger.info({ roomId: summary.id, maxPlayers: summary.maxPlayers }, 'room_created'));
+    this.on('removed', (roomId) => logger.info({ roomId }, 'room_removed'));
   }
 
   public async loadSeed(): Promise<void> {
     const file = new URL('../data/rooms.json', import.meta.url);
     const parsed: unknown = JSON.parse(await readFile(file, 'utf8'));
     const seedRooms = z.array(roomConfigSchema).parse(parsed);
+    if (seedRooms.length > this.#limits.maxRooms) throw new Error('Seed room count exceeds MAX_ROOMS');
     for (const config of seedRooms) {
+      if (config.maxPlayers > this.#limits.maxPlayersPerRoom) throw new Error(`Seed room ${config.id} exceeds MAX_PLAYERS_PER_ROOM`);
       const log = await this.#loggerFactory(config.id);
       this.#rooms.set(config.id, new Room({ ...config, log, persistent: true }));
     }
@@ -371,6 +389,8 @@ export class RoomManager extends EventEmitter<RoomManagerEvents> {
 
   public async create(input: unknown): Promise<RoomSummary> {
     const parsed = roomCreateInputSchema.parse(input);
+    if (this.#rooms.size >= this.#limits.maxRooms) throw new Error('Maximum room limit reached');
+    if ((parsed.maxPlayers ?? 8) > this.#limits.maxPlayersPerRoom) throw new Error('Room player limit exceeds MAX_PLAYERS_PER_ROOM');
     const id = (parsed.id ?? `room-${Date.now()}`).trim();
     if (this.#rooms.has(id)) throw new Error('Invalid or duplicate room id');
     const config = roomConfigSchema.parse({

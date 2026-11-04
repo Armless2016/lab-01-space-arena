@@ -4,7 +4,7 @@
 
 <!-- Replace USERNAME/REPOSITORY with the owner and repository name after publishing. -->
 
-Labs 01–07 build one browser multiplayer game step by step. The client is in `client/`, the Node.js server in `server/`, and **the deterministic simulation and wire codecs shared by both runtimes are in `shared/`**.
+Labs 01–08 build one browser multiplayer game step by step. The client is in `client/`, the Node.js server in `server/`, and **the deterministic simulation and wire codecs shared by both runtimes are in `shared/`**.
 
 ## Lab 05 — Server-authoritative multiplayer, prediction and binary protocol
 
@@ -377,3 +377,133 @@ git push origin lab-07
 ```
 
 The submission is the URL of the same public GitHub repository with historical tags `lab-01` through `lab-07`. Do not delete or move the earlier lab tags.
+
+
+## Lab 08 — Production release: Docker, metrics, HTTPS/WSS and PWA
+
+Lab 08 keeps the complete Lab 01–07 game. It adds production lifecycle handling, hardened WebSocket admission, structured JSON logs, metrics, a two-stage container image, TLS/WebSocket reverse proxy configuration, a release workflow and installable PWA metadata.
+
+### Public links and how to play
+
+- **Live game:** `https://YOUR_DOMAIN` — replace this placeholder after deploying to a VPS/domain.
+- **WebSocket:** `wss://YOUR_DOMAIN/ws` — the client derives `wss:` automatically when the page is opened over HTTPS.
+- **Health:** `https://YOUR_DOMAIN/health` — liveness plus the release `gitSha`.
+- **Readiness:** `https://YOUR_DOMAIN/ready` — 200 only while the process is accepting players; 503 during startup/shutdown.
+- **Metrics:** `https://YOUR_DOMAIN/metrics` — Prometheus text format.
+
+Open the game, enter a display name, select the same room as another player and press **Join**. Use **W/A/S/D** or arrow keys to steer, **Space** to fire, and the lobby chat to communicate. The game remains server-authoritative: browser clients send control input, not coordinates. The PWA can be installed from the browser's install prompt; on iOS use Share → Add to Home Screen. Touch-first mobile screens also show on-screen thrust/turn/fire controls. The service worker caches the static game shell only; API, WebSocket and metrics responses are never cached.
+
+### Architecture
+
+![Production deployment architecture](docs/production-architecture.svg)
+
+The browser connects to Caddy over HTTPS/WSS. Caddy terminates TLS and forwards HTTP and WebSocket upgrades to one Node.js app process. That process owns all room maps and authoritative simulations. Match logs are written to a persistent Docker volume. **Run one app replica for this lab**: multiple processes would hold independent in-memory room maps and could split members of one room across different game states. Horizontal scaling requires shared room ownership or a separate authoritative state service, which is intentionally outside this lab.
+
+### Node.js lifecycle and safety
+
+- `PORT` is read from environment and validated by Zod with an integer range of 1–65535.
+- `/health` reports process liveness and `BUILD_SHA`; it remains a liveness endpoint while shutdown begins.
+- `/ready` returns 503 once shutdown starts or before the server can accept players. HTTP room creation and WebSocket upgrades are rejected while not ready.
+- On `SIGINT`/`SIGTERM`, readiness is disabled first, new upgrades are rejected, each connected client receives `{ "type": "shutdown" }`, sockets close with WebSocket code **1001**, room log streams are ended, Pino is flushed, and the process exits with code 0. An 8-second hard deadline protects the Docker 10-second stop window.
+- `uncaughtException` and `unhandledRejection` are logged at fatal level and trigger process shutdown with exit code 1; they are not swallowed by empty handlers.
+- The WebSocket handshake checks the exact `Origin` against `ALLOWED_ORIGINS`. Missing Origin is rejected in production by default. `MAX_CONNECTIONS_PER_IP`, `MAX_ROOMS`, `MAX_PLAYERS_PER_ROOM`, message-rate and payload limits are validated at startup.
+- If `TRUST_PROXY=true`, the first `X-Forwarded-For` address is used for IP accounting. Set this only behind the configured trusted reverse proxy (Caddy in the supplied Compose file).
+
+### Logs and metrics
+
+The server uses Pino structured JSON logs on stdout. Each room/player log context includes the room ID and, after join, player ID. Sensitive key names such as passwords, tokens, API keys, cookies and authorization headers are redacted. Chat text is not copied into Pino operational logs (only its length is logged); the existing per-match NDJSON replay stream remains a separate game-event log.
+
+- `GET /metrics` exposes Prometheus gauges/counters for active rooms, players and WebSocket connections; rolling messages/s and bytes/s; event-loop utilization and p95 delay; RSS and heap; per-room simulation step duration and over-budget step count.
+- `GET /api/metrics` returns the same measurements as JSON for local inspection.
+- The runtime metrics use fixed-size rolling buckets and Node's `monitorEventLoopDelay`/`performance.eventLoopUtilization`, so monitoring does not keep an unbounded message history.
+
+### Docker image and shutdown test
+
+The Dockerfile uses two stages. The build stage installs workspace dependencies, runs `typecheck`, compiles `shared` and `server`, and builds the Vite client. The runtime stage contains compiled output and production dependencies only, runs as the built-in non-root `node` user, and has a Docker `HEALTHCHECK`. The process is started directly with `CMD ["node", "server/dist/index.js"]` rather than an `npm` wrapper so Docker's SIGTERM reaches Node directly. The target runtime image size is **below 200 MB**; this is measured, not assumed.
+
+From the repository root:
+
+```powershell
+npm install
+npm run typecheck
+npm run lint
+npm run test:coverage
+npm run build
+npm run docker:build
+npm run docker:test:shutdown
+```
+
+`docker:test:shutdown` checks the local image size, `/health` and `/ready`, joins a WebSocket client, sends Docker `stop --time 10`, verifies the client receives the shutdown message and close code 1001, verifies container exit code 0, and checks for the `server_shutdown_complete` JSON log. Docker Desktop/Engine must be running. If the script reports an image above 200 MB, inspect the image layers before release; do not report the target as met until this check passes.
+
+For local development, start the server first with `npm run dev:server` in one terminal, then start Vite with `npm run dev:client` in a second terminal; open `http://localhost:5173`. Starting the server first avoids an initial Vite `/api/rooms` proxy request racing the Node listener. For a local container run, copy `.env.example` to `.env`, then run `npm run docker:build` and `npm run docker:run`; open `http://localhost:3000`. The development allowlist includes the Vite and direct-container origins. To run the malformed-frame isolation experiment while the local Node server is running, use `npm run test:ws-abuse`: it sends a burst of 1,000 malformed frames to one room and checks that a healthy observer in another room keeps receiving snapshots. For public deployment, follow [`deploy/DEPLOYMENT.md`](deploy/DEPLOYMENT.md) and start from [`deploy/.env.production.example`](deploy/.env.production.example).
+
+#### Failure drills
+
+- **A client disappears mid-match:** close one browser tab or disable its network. The server's WebSocket `close` handler removes that player, stops the room simulation if it becomes empty, updates the player list and records a structured leave event. Confirm the other player remains connected and `/metrics` shows the player count falling.
+- **The server is unavailable:** stop the app container without restarting it (`docker compose stop app`). Connected clients retry with exponential backoff; after the bounded retry budget they emit `unavailable`, stop the local match and return to the lobby. Start the service again with `docker compose start app`. A graceful `docker stop` is separately checked by `npm run docker:test:shutdown`, which verifies the shutdown message and close code 1001.
+- **A malformed-frame flood:** with the local server running, execute `npm run test:ws-abuse`. The script sends up to 1,000 invalid JSON frames to one room, expects the abusive socket to be closed, and confirms an observer in another room continues receiving ticks. It reports the unaffected room's step p99 before/after and fails if the burst adds an over-budget simulation step.
+- **Origin policy:** `npm run test:coverage` runs the origin policy tests. Production accepts only exact HTTPS origins from `ALLOWED_ORIGINS`; the Docker shutdown test uses an explicit allowed test Origin and keeps missing-Origin acceptance disabled.
+
+### GitHub release and public HTTPS/WSS deployment
+
+The normal CI workflow runs on every push and pull request. A separate release workflow triggers on tags matching `v*`, builds and publishes `ghcr.io/<owner>/<repository>:<tag>`, and can deploy it to a single Docker VPS over SSH. To enable that deploy step, set the repository Actions variable `DEPLOY_ENABLED=true` and configure the deployment secrets described in `deploy/DEPLOYMENT.md`. Set a DNS record to the VPS and open TCP 80/443. Either make the GHCR package public or configure the optional `DEPLOY_GHCR_USERNAME` and `DEPLOY_GHCR_TOKEN` secrets (classic PAT with `read:packages`) so the VPS can pull a private image. Caddy obtains/renews the TLS certificate and proxies WebSocket upgrades; public game traffic is therefore `wss://`, not `ws://`.
+
+The release image receives `BUILD_SHA=${{ github.sha }}`. After a successful deployment, `/health` must report the SHA of the commit referenced by `v1.0.0`. The `lab-08` tag is the academic checkpoint; `v1.0.0` is the production release tag and triggers image publication/deployment.
+
+### Cross-lab measurement tables — fill with real results
+
+**Lab 05 — network protocol** (copy your actual `npm run bench:protocol` output):
+
+| Payload | JSON bytes | Binary bytes | Reduction |
+|---|---:|---:|---:|
+| Input frame | TODO | TODO | TODO |
+| Snapshot frame for the benchmark scene | TODO | TODO | TODO |
+
+**Lab 07 — performance and load** (copy measurements from the 8-bot Chrome Performance recording and `npm run loadtest`):
+
+| Measurement | Result |
+|---|---:|
+| Frame time p50 / p95 / p99 with 8 bots | TODO |
+| GC pause count / total pause | TODO |
+| Top allocation source | TODO |
+| Server step p99 with 8 / 32 / 64 / 128 clients | TODO |
+| First client count above 33.33 ms, if any | TODO |
+| Worker main-thread / round-trip time and decision | TODO |
+
+**Lab 08 — cross-network multiplayer** (record two real players on different networks after deployment):
+
+| Player | Network | RTT to server |
+|---|---|---:|
+| Player A | TODO (e.g. home Wi-Fi) | TODO ms |
+| Player B | TODO (e.g. mobile hotspot) | TODO ms |
+
+Do not replace TODO values with estimates. Include screenshots of `/health`, `/metrics`, the GitHub Actions release run and a real two-player session. The existing [`docs/two-window-demo.gif`](docs/two-window-demo.gif) is a local two-window example; record a new public-deployment clip for final submission.
+
+### Capacity and remaining limitations
+
+The configured defaults are at most **100 rooms**, **16 players per room**, **32 simultaneous WebSocket connections per IP**, 120 messages/s per socket and 16 KiB per message. These are protective configuration limits, not a claim that one machine can sustain every configured player simultaneously. The measured process capacity is the largest load-test point that keeps the room step within 33.33 ms; enter the measured value above. State is in process memory, so the app is deliberately deployed as one replica. Match logs persist in a Docker volume, but room/player state is not restored after a crash. The current lab has display names rather than authenticated accounts; Origin checks reduce cross-site WebSocket abuse but are not user authentication. Rate limits and payload bounds limit abusive clients, but production internet exposure still needs monitoring, backups, an abuse policy and authentication before serving untrusted users long-term.
+
+### Three-to-five-minute demo video plan
+
+1. **0:00–0:40** — open the public HTTPS address on two devices/networks, enter the same room and move both ships.
+2. **0:40–1:20** — show chat, firing, enemies, pickups and asteroid destruction; demonstrate installed PWA on a phone.
+3. **1:20–2:00** — show `/health` with the release SHA, `/ready`, `/metrics` and the `wss://` WebSocket endpoint in DevTools Network.
+4. **2:00–2:45** — show Docker image build/size and `docker:test:shutdown` evidence (shutdown message, close 1001, exit 0).
+5. **2:45–3:30** — show GitHub Actions release workflow, GHCR image tag, and the lab/release tags `lab-08` and `v1.0.0`.
+6. **3:30–4:00** — summarize measured RTT, capacity, and the single-process room limitation.
+
+## Submission — Lab 08
+
+Keep this in the same public repository. After local tests pass, Docker shutdown check is green, the public HTTPS/WSS deployment has been tested from two different networks, and README contains real measurements/video, publish both tags:
+
+```powershell
+git add .
+git commit -m "lab-08: production Docker metrics and public PWA deployment"
+git push origin main
+git tag lab-08
+git push origin lab-08
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The `v1.0.0` tag triggers the GHCR release workflow. Do not create it until the final commit is ready and the deployment secrets/Actions variable are configured. Keep historical tags `lab-01` through `lab-07` unchanged.

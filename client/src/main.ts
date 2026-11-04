@@ -43,6 +43,7 @@ const diagnosticOutput = mustGet<HTMLElement>('#diagnosticOutput');
 const microtaskButton = mustGet<HTMLButtonElement>('#microtaskBtn');
 const timingButton = mustGet<HTMLButtonElement>('#timingBtn');
 const controls = mustGet<HTMLElement>('#controls');
+const touchControls = mustGet<HTMLElement>('#touchControls');
 const canvasMessage = mustGet<HTMLElement>('#canvasMessage');
 const chatPanel = mustGet<HTMLElement>('#chatPanel');
 const chatMessages = mustGet<HTMLElement>('#chatMessages');
@@ -146,7 +147,7 @@ lobbyElements.joinButton.addEventListener('click', () => lobby.join(lobbyView.se
 
 function leaveRoom(): void {
   game?.stop(); game = null;
-  controls.hidden = true; chatPanel.hidden = true; networkPanel.hidden = true; diagnosticsPanel.hidden = false;
+  controls.hidden = true; touchControls.hidden = true; chatPanel.hidden = true; networkPanel.hidden = true; diagnosticsPanel.hidden = false;
   socketClient.close(); hud.hide(); lobbyPanel.hidden = false; void lobby.start();
 }
 leaveLobbyButton.addEventListener('click', leaveRoom);
@@ -161,6 +162,15 @@ function addChatLine(text: string, className = ''): void {
 listenDetail<SocketStateDetail>(socketClient, 'state', ({ state, delay, reason }) => {
   socketState.textContent = state === 'reconnecting' ? `reconnecting in ${Math.round(delay ?? 0)} ms` : state;
   if (state === 'closed' && reason) addChatLine(`Socket closed: ${reason}`, 'system');
+});
+
+socketClient.addEventListener('shutdown', () => {
+  addChatLine('Server is restarting. Returned to the lobby.', 'system');
+  leaveRoom();
+});
+socketClient.addEventListener('unavailable', () => {
+  addChatLine('Server is unavailable. Returned to the lobby.', 'system');
+  leaveRoom();
 });
 
 listenDetail<IncomingMessage>(socketClient, 'message', (message) => {
@@ -206,7 +216,7 @@ chatSendBtn.addEventListener('click', () => {
 chatInput.addEventListener('keydown', (event: KeyboardEvent) => { if (event.key === 'Enter') chatSendBtn.click(); });
 
 function startLocalGame({ room, playerName }: LobbyJoinDetail): void {
-  lobby.stop(); lobbyPanel.hidden = true; hud.show(); controls.hidden = false; chatPanel.hidden = false; networkPanel.hidden = true;
+  lobby.stop(); lobbyPanel.hidden = true; hud.show(); controls.hidden = false; touchControls.hidden = false; chatPanel.hidden = false; networkPanel.hidden = true;
   chatMessages.replaceChildren(); hud.setPlayer(playerName); hud.setRoom(room.name); socketClient.connect(); socketClient.join(room.id, playerName, protocolSelect.value);
 }
 
@@ -271,3 +281,31 @@ updateNetworkControlLabels();
 window.addEventListener('beforeunload', () => { lobby.stop(); game?.stop(); socketClient.close(); disposePerformanceWorker(); loadController?.abort(new DOMException('Page closed', 'AbortError')); });
 hud.hide();
 loadingRenderer.draw({ progress: 0, label: 'Click “Enable audio & load game” to begin.' });
+
+
+// Progressive Web App: install the service worker only from HTTPS or localhost.
+if ('serviceWorker' in navigator) {
+  void navigator.serviceWorker.register('/service-worker.js').catch((error: unknown) => {
+    diagnosticOutput.textContent = `PWA service worker registration failed: ${formatError(error)}`;
+  });
+}
+
+interface BeforeInstallPromptEvent extends Event {
+  prompt(): Promise<void>;
+  userChoice: Promise<{ readonly outcome: 'accepted' | 'dismissed' }>;
+}
+const installPwaButton = document.querySelector<HTMLButtonElement>('#installPwaBtn');
+let deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
+window.addEventListener('beforeinstallprompt', (event: Event) => {
+  event.preventDefault();
+  // Browser emits a platform-specific install event; it is narrowed to the optional prompt contract here.
+  deferredInstallPrompt = event as BeforeInstallPromptEvent;
+  if (installPwaButton) installPwaButton.hidden = false;
+});
+installPwaButton?.addEventListener('click', async () => {
+  if (!deferredInstallPrompt) return;
+  await deferredInstallPrompt.prompt();
+  const choice = await deferredInstallPrompt.userChoice;
+  if (choice.outcome === 'accepted' && installPwaButton) installPwaButton.hidden = true;
+  deferredInstallPrompt = null;
+});

@@ -75,6 +75,14 @@ test('two independent browser clients share movement and room chat', async () =>
     await pageA.locator('#chatInput').fill('playwright-chat-check');
     await pageA.locator('#chatSendBtn').click();
     await expect(pageB.locator('#chatMessages')).toContainText('playwright-chat-check');
+
+    // Simulate a player disappearing mid-match; the other client must stay in the room.
+    await pageA.close();
+    await expect(pageB.locator('#chatMessages')).toContainText('Browser Alpha left');
+    await expect(pageB.locator('#chatPanel')).toBeVisible();
+    await pageB.locator('#chatInput').fill('room-still-alive');
+    await pageB.locator('#chatSendBtn').click();
+    await expect(pageB.locator('#chatMessages')).toContainText('room-still-alive');
   } finally {
     await browserA?.close();
     await browserB?.close();

@@ -1,0 +1,126 @@
+/** Compile-time string brands prevent mixing unrelated numeric identifiers. */
+export type Brand<Value extends number, Name extends string> = Value & {
+    readonly __brand: Name;
+};
+export type EntityId = Brand<number, 'EntityId'>;
+export type StepNumber = Brand<number, 'StepNumber'>;
+export type InputSeq = Brand<number, 'InputSeq'>;
+export declare function entityId(value: number): EntityId;
+export declare function stepNumber(value: number): StepNumber;
+export declare function inputSeq(value: number): InputSeq;
+export interface VectorLike {
+    readonly x: number;
+    readonly y: number;
+}
+export interface ControlInput {
+    readonly seq?: InputSeq;
+    readonly throttle?: number;
+    readonly turn?: number;
+    readonly fire?: boolean;
+}
+export interface ShipState {
+    id: EntityId;
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    angle: number;
+    radius: number;
+    hp: number;
+    maxHp: number;
+    score: number;
+    fireCooldown: number;
+    shotsFired: number;
+    collisionCooldown: number;
+    respawnTick: number;
+}
+export interface BulletState {
+    id: EntityId;
+    ownerId: EntityId;
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    angle: number;
+    ttl: number;
+    radius: number;
+    homing: boolean;
+}
+export interface AsteroidState {
+    id: EntityId;
+    x: number;
+    y: number;
+    vx: number;
+    vy: number;
+    angle: number;
+    angularVelocity: number;
+    radius: number;
+    hp: number;
+    maxHp: number;
+}
+export interface PickupState {
+    id: EntityId;
+    x: number;
+    y: number;
+    radius: number;
+    active: boolean;
+    respawnTick: number;
+}
+export interface SimulationState {
+    version: 3;
+    width: number;
+    height: number;
+    seed: number;
+    randomState: number;
+    tick: StepNumber;
+    ships: ShipState[];
+    enemies: ShipState[];
+    bullets: BulletState[];
+    /** Reusable bullet instances to reduce short-lived allocations on the server. */
+    bulletPool: BulletState[];
+    asteroids: AsteroidState[];
+    pickups: PickupState[];
+    nextBulletId: number;
+    nextAsteroidId: number;
+    enemyHp: number;
+}
+export type EntityKind = 'ship' | 'enemy' | 'bullet' | 'asteroid' | 'pickup' | 'particle';
+export interface SnapshotShip extends Omit<ShipState, 'collisionCooldown' | 'respawnTick'> {
+    readonly kind: 'ship';
+}
+export interface SnapshotEnemy extends Omit<ShipState, 'collisionCooldown' | 'respawnTick'> {
+    readonly kind: 'enemy';
+}
+export interface SnapshotBullet extends BulletState {
+    readonly kind: 'bullet';
+}
+export interface SnapshotAsteroid extends AsteroidState {
+    readonly kind: 'asteroid';
+}
+export interface SnapshotPickup extends Omit<PickupState, 'respawnTick'> {
+    readonly kind: 'pickup';
+}
+/** A single discriminated wire entity, useful for generic snapshot processing. */
+export type SnapshotEntity = SnapshotShip | SnapshotEnemy | SnapshotBullet | SnapshotAsteroid | SnapshotPickup;
+export interface SnapshotMessage {
+    type: 'snapshot';
+    version: 3;
+    tick: StepNumber;
+    ackSeq: InputSeq;
+    serverTimeMs: number;
+    width: number;
+    height: number;
+    players: SnapshotShip[];
+    enemies: SnapshotEnemy[];
+    bullets: SnapshotBullet[];
+    asteroids: SnapshotAsteroid[];
+    pickups: SnapshotPickup[];
+}
+export interface InputMessage extends ControlInput {
+    type: 'input';
+    seq: InputSeq;
+    throttle: number;
+    turn: number;
+    fire: boolean;
+}
+export declare function assertNever(value: never, message?: string): never;
