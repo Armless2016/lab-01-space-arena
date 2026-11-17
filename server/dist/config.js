@@ -2,7 +2,12 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 const PROJECT_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const localOrigins = ['http://localhost:5173', 'http://127.0.0.1:5173'];
+const localOrigins = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+];
 const booleanEnv = z.preprocess((value) => {
     if (typeof value === 'boolean')
         return value;
@@ -69,7 +74,11 @@ export function loadConfig() {
         maxConnectionsPerIp: env.MAX_CONNECTIONS_PER_IP,
         maxRooms: env.MAX_ROOMS,
         maxPlayersPerRoom: env.MAX_PLAYERS_PER_ROOM,
-        allowedOrigins: env.ALLOWED_ORIGINS,
+        // In development/test, always retain local Vite and direct-server origins,
+        // even if a stale .env contains only a production domain. Production stays strict.
+        allowedOrigins: env.NODE_ENV === 'production'
+            ? env.ALLOWED_ORIGINS
+            : [...new Set([...env.ALLOWED_ORIGINS, ...localOrigins])],
         allowMissingOrigin: env.ALLOW_MISSING_ORIGIN || env.NODE_ENV !== 'production',
         trustProxy: env.TRUST_PROXY,
         logLevel: env.LOG_LEVEL,
